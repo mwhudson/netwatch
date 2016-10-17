@@ -12,7 +12,7 @@
 #include <sys/epoll.h>
 
 static void dump_link_info(int act, struct rtnl_link *link) {
-  printf("act: %d ifindex: %d ifname: %s\n", act, rtnl_link_get_ifindex(link),
+  printf("rtnl act: %d ifindex: %d ifname: %s\n", act, rtnl_link_get_ifindex(link),
          rtnl_link_get_name(link));
 }
 
@@ -29,7 +29,7 @@ static char buf[100];
 
 static void dump_addr_info(int act, struct rtnl_addr *addr) {
   struct nl_addr *local = rtnl_addr_get_local(addr);
-  printf("act: %d ifindex: %d local: %s\n", act, rtnl_addr_get_ifindex(addr),
+  printf("rtnl act: %d ifindex: %d local: %s\n", act, rtnl_addr_get_ifindex(addr),
          nl_addr2str(local, buf, sizeof(buf)));
 }
 
@@ -350,45 +350,13 @@ static int nl80211_handler(struct nl_msg *msg, void *arg) {
   nla_parse(tb, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
             genlmsg_attrlen(gnlh, 0), NULL);
 
-  if (tb[NL80211_ATTR_IFINDEX])
+  if (tb[NL80211_ATTR_IFINDEX]) {
     ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
-  /* if (tb[NL80211_ATTR_WDEV]) { */
-  /* 	wdev_id = nla_get_u64(tb[NL80211_ATTR_WDEV]); */
-  /* 	wdev_id_set = 1; */
-  /* } */
-
-  printf("ifidx: %d wdev_id: %lld wdev_id_set: %d\n", ifidx, wdev_id,
-         wdev_id_set);
-  printf("cmd: %s\n", nl80211_command_to_string(gnlh->cmd));
-  if (tb[NL80211_ATTR_SCAN_SSIDS]) {
-    int num_ssids = 0;
-    nla_for_each_nested(nl, tb[NL80211_ATTR_SCAN_SSIDS], rem) {
-      printf("ssid: %s\n", (char *)nla_data(nl));
-      num_ssids++;
-    }
-    printf("num_ssids: %d\n", num_ssids);
+  } else {
+	  printf("nl80211 message for unknown interface");
   }
 
-  switch (gnlh->cmd) {
-  case NL80211_CMD_DEAUTHENTICATE:
-    printf("DEAUTHENTICATE\n");
-    break;
-  case NL80211_CMD_AUTHENTICATE:
-    printf("AUTHENTICATE\n");
-    break;
-  }
-  /* dl_list_for_each_safe(drv, tmp, &global->interfaces, */
-  /* 		      struct wpa_driver_nl80211_data, list) { */
-  /* 	for (bss = drv->first_bss; bss; bss = bss->next) { */
-  /* 		if ((ifidx == -1 && !wdev_id_set) || */
-  /* 		    ifidx == bss->ifindex || */
-  /* 		    (wdev_id_set && bss->wdev_id_set && */
-  /* 		     wdev_id == bss->wdev_id)) { */
-  /* 			do_process_drv_event(bss, gnlh->cmd, tb); */
-  /* 			return NL_SKIP; */
-  /* 		} */
-  /* 	} */
-  /* } */
+  printf("nl80211 ifidx: %d cmd: %s\n", ifidx, nl80211_command_to_string(gnlh->cmd));
 
   return NL_SKIP;
 }
