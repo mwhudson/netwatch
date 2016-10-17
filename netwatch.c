@@ -11,9 +11,24 @@
 
 #include <sys/epoll.h>
 
+static char *act2str(int act) {
+#define C2S(x)                                                                 \
+  case x:                                                                      \
+    return &#x[7];
+  switch (act) {
+    C2S(NL_ACT_UNSPEC)
+    C2S(NL_ACT_NEW)
+    C2S(NL_ACT_DEL)
+    C2S(NL_ACT_GET)
+    C2S(NL_ACT_SET)
+    C2S(NL_ACT_CHANGE)
+  }
+#undef C2S
+}
+
 static void dump_link_info(int act, struct rtnl_link *link) {
-  printf("rtnl act: %d ifindex: %d ifname: %s\n", act, rtnl_link_get_ifindex(link),
-         rtnl_link_get_name(link));
+  printf("link act: %-6s ifindex: %2d ifname: %s flags: 0x%08x\n", act2str(act),
+         rtnl_link_get_ifindex(link), rtnl_link_get_name(link), rtnl_link_get_flags(link));
 }
 
 static void cb_link(struct nl_cache *cache, struct nl_object *ob, int act,
@@ -29,8 +44,8 @@ static char buf[100];
 
 static void dump_addr_info(int act, struct rtnl_addr *addr) {
   struct nl_addr *local = rtnl_addr_get_local(addr);
-  printf("rtnl act: %d ifindex: %d local: %s\n", act, rtnl_addr_get_ifindex(addr),
-         nl_addr2str(local, buf, sizeof(buf)));
+  printf("addr act: %-6s ifindex: %2d local: %s\n", act2str(act),
+         rtnl_addr_get_ifindex(addr), nl_addr2str(local, buf, sizeof(buf)));
 }
 
 static void cb_addr(struct nl_cache *cache, struct nl_object *ob, int act,
@@ -131,7 +146,6 @@ static int family_handler(struct nl_msg *msg, void *arg) {
     }
     name = nla_data(tb2[CTRL_ATTR_MCAST_GRP_NAME]);
     len = nla_len(tb2[CTRL_ATTR_MCAST_GRP_NAME]);
-    printf("family %s id %d\n", name, nla_get_u32(tb2[CTRL_ATTR_MCAST_GRP_ID]));
     if (strncmp(name, "scan", len) == 0) {
       res->scan_id = nla_get_u32(tb2[CTRL_ATTR_MCAST_GRP_ID]);
     }
@@ -183,7 +197,6 @@ static int send_and_recv(struct nl_sock *genl_sock, struct nl_msg *msg,
   nl_cb_err(cb, NL_CB_CUSTOM, error_handler, &err);
   nl_cb_set(cb, NL_CB_FINISH, NL_CB_CUSTOM, finish_handler, &err);
   nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, ack_handler, &err);
-  //  nl_cb_set(cb, NL_CB_SEQ_CHECK, NL_CB_CUSTOM, no_seq_check, NULL);
 
   if (valid_handler) {
     nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, valid_data);
@@ -353,10 +366,11 @@ static int nl80211_handler(struct nl_msg *msg, void *arg) {
   if (tb[NL80211_ATTR_IFINDEX]) {
     ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
   } else {
-	  printf("nl80211 message for unknown interface");
+    printf("nl80211 message for unknown interface");
   }
 
-  printf("nl80211 ifidx: %d cmd: %s\n", ifidx, nl80211_command_to_string(gnlh->cmd));
+  printf("wlan ifidx: %d cmd: %s\n", ifidx,
+         nl80211_command_to_string(gnlh->cmd));
 
   return NL_SKIP;
 }
@@ -373,14 +387,7 @@ struct nl_sock *setup_nl80211(struct nl_sock *sock) {
     fprintf(stderr, "genl_connect failed: %d\n", r);
     exit(1);
   }
-  nl80211_id = genl_ctrl_resolve(sock, "nl80211");
-  if (nl80211_id < 0) {
-    fprintf(stderr, "genl_ctrl_resolve(\"nl80211\") failed %d\n", nl80211_id);
-    exit(1);
-  }
-  printf("nl80211_id: %d\n", nl80211_id);
   nl_get_multicast_ids(sock, &ids);
-  printf("multicast_ids: mlme: %d, scan: %d\n", ids.mlme_id, ids.scan_id);
 
   int err;
   event_cb = nl_cb_alloc(NL_CB_DEFAULT);
