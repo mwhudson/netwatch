@@ -9,6 +9,8 @@
 #include <linux/genetlink.h>
 #include <linux/nl80211.h>
 
+#include <sys/epoll.h>
+
 static void dump_link_info(int act, struct rtnl_link *link) {
   printf("act: %d ifindex: %d ifname: %s\n", act, rtnl_link_get_ifindex(link),
          rtnl_link_get_name(link));
@@ -131,10 +133,10 @@ static int family_handler(struct nl_msg *msg, void *arg) {
     len = nla_len(tb2[CTRL_ATTR_MCAST_GRP_NAME]);
     printf("family %s id %d\n", name, nla_get_u32(tb2[CTRL_ATTR_MCAST_GRP_ID]));
     if (strncmp(name, "scan", len) == 0) {
-	    res->scan_id = nla_get_u32(tb2[CTRL_ATTR_MCAST_GRP_ID]);
+      res->scan_id = nla_get_u32(tb2[CTRL_ATTR_MCAST_GRP_ID]);
     }
     if (strncmp(name, "mlme", len) == 0) {
-	    res->mlme_id = nla_get_u32(tb2[CTRL_ATTR_MCAST_GRP_ID]);
+      res->mlme_id = nla_get_u32(tb2[CTRL_ATTR_MCAST_GRP_ID]);
     }
   };
 
@@ -181,7 +183,7 @@ static int send_and_recv(struct nl_sock *genl_sock, struct nl_msg *msg,
   nl_cb_err(cb, NL_CB_CUSTOM, error_handler, &err);
   nl_cb_set(cb, NL_CB_FINISH, NL_CB_CUSTOM, finish_handler, &err);
   nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, ack_handler, &err);
-//  nl_cb_set(cb, NL_CB_SEQ_CHECK, NL_CB_CUSTOM, no_seq_check, NULL);
+  //  nl_cb_set(cb, NL_CB_SEQ_CHECK, NL_CB_CUSTOM, no_seq_check, NULL);
 
   if (valid_handler) {
     nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, valid_data);
@@ -199,7 +201,8 @@ out:
   return err;
 }
 
-static int nl_get_multicast_ids(struct nl_sock *genl_sock,   struct nl80211_multicast_ids *res) {
+static int nl_get_multicast_ids(struct nl_sock *genl_sock,
+                                struct nl80211_multicast_ids *res) {
   struct nl_msg *msg;
   int ret = -1;
 
@@ -218,174 +221,176 @@ nla_put_failure:
   return ret;
 }
 
-static const char * nl80211_command_to_string(enum nl80211_commands cmd)
-{
-#define C2S(x) case x: return #x;
-	switch (cmd) {
-	C2S(NL80211_CMD_UNSPEC)
-	C2S(NL80211_CMD_GET_WIPHY)
-	C2S(NL80211_CMD_SET_WIPHY)
-	C2S(NL80211_CMD_NEW_WIPHY)
-	C2S(NL80211_CMD_DEL_WIPHY)
-	C2S(NL80211_CMD_GET_INTERFACE)
-	C2S(NL80211_CMD_SET_INTERFACE)
-	C2S(NL80211_CMD_NEW_INTERFACE)
-	C2S(NL80211_CMD_DEL_INTERFACE)
-	C2S(NL80211_CMD_GET_KEY)
-	C2S(NL80211_CMD_SET_KEY)
-	C2S(NL80211_CMD_NEW_KEY)
-	C2S(NL80211_CMD_DEL_KEY)
-	C2S(NL80211_CMD_GET_BEACON)
-	C2S(NL80211_CMD_SET_BEACON)
-	C2S(NL80211_CMD_START_AP)
-	C2S(NL80211_CMD_STOP_AP)
-	C2S(NL80211_CMD_GET_STATION)
-	C2S(NL80211_CMD_SET_STATION)
-	C2S(NL80211_CMD_NEW_STATION)
-	C2S(NL80211_CMD_DEL_STATION)
-	C2S(NL80211_CMD_GET_MPATH)
-	C2S(NL80211_CMD_SET_MPATH)
-	C2S(NL80211_CMD_NEW_MPATH)
-	C2S(NL80211_CMD_DEL_MPATH)
-	C2S(NL80211_CMD_SET_BSS)
-	C2S(NL80211_CMD_SET_REG)
-	C2S(NL80211_CMD_REQ_SET_REG)
-	C2S(NL80211_CMD_GET_MESH_CONFIG)
-	C2S(NL80211_CMD_SET_MESH_CONFIG)
-	C2S(NL80211_CMD_SET_MGMT_EXTRA_IE)
-	C2S(NL80211_CMD_GET_REG)
-	C2S(NL80211_CMD_GET_SCAN)
-	C2S(NL80211_CMD_TRIGGER_SCAN)
-	C2S(NL80211_CMD_NEW_SCAN_RESULTS)
-	C2S(NL80211_CMD_SCAN_ABORTED)
-	C2S(NL80211_CMD_REG_CHANGE)
-	C2S(NL80211_CMD_AUTHENTICATE)
-	C2S(NL80211_CMD_ASSOCIATE)
-	C2S(NL80211_CMD_DEAUTHENTICATE)
-	C2S(NL80211_CMD_DISASSOCIATE)
-	C2S(NL80211_CMD_MICHAEL_MIC_FAILURE)
-	C2S(NL80211_CMD_REG_BEACON_HINT)
-	C2S(NL80211_CMD_JOIN_IBSS)
-	C2S(NL80211_CMD_LEAVE_IBSS)
-	C2S(NL80211_CMD_TESTMODE)
-	C2S(NL80211_CMD_CONNECT)
-	C2S(NL80211_CMD_ROAM)
-	C2S(NL80211_CMD_DISCONNECT)
-	C2S(NL80211_CMD_SET_WIPHY_NETNS)
-	C2S(NL80211_CMD_GET_SURVEY)
-	C2S(NL80211_CMD_NEW_SURVEY_RESULTS)
-	C2S(NL80211_CMD_SET_PMKSA)
-	C2S(NL80211_CMD_DEL_PMKSA)
-	C2S(NL80211_CMD_FLUSH_PMKSA)
-	C2S(NL80211_CMD_REMAIN_ON_CHANNEL)
-	C2S(NL80211_CMD_CANCEL_REMAIN_ON_CHANNEL)
-	C2S(NL80211_CMD_SET_TX_BITRATE_MASK)
-	C2S(NL80211_CMD_REGISTER_FRAME)
-	C2S(NL80211_CMD_FRAME)
-	C2S(NL80211_CMD_FRAME_TX_STATUS)
-	C2S(NL80211_CMD_SET_POWER_SAVE)
-	C2S(NL80211_CMD_GET_POWER_SAVE)
-	C2S(NL80211_CMD_SET_CQM)
-	C2S(NL80211_CMD_NOTIFY_CQM)
-	C2S(NL80211_CMD_SET_CHANNEL)
-	C2S(NL80211_CMD_SET_WDS_PEER)
-	C2S(NL80211_CMD_FRAME_WAIT_CANCEL)
-	C2S(NL80211_CMD_JOIN_MESH)
-	C2S(NL80211_CMD_LEAVE_MESH)
-	C2S(NL80211_CMD_UNPROT_DEAUTHENTICATE)
-	C2S(NL80211_CMD_UNPROT_DISASSOCIATE)
-	C2S(NL80211_CMD_NEW_PEER_CANDIDATE)
-	C2S(NL80211_CMD_GET_WOWLAN)
-	C2S(NL80211_CMD_SET_WOWLAN)
-	C2S(NL80211_CMD_START_SCHED_SCAN)
-	C2S(NL80211_CMD_STOP_SCHED_SCAN)
-	C2S(NL80211_CMD_SCHED_SCAN_RESULTS)
-	C2S(NL80211_CMD_SCHED_SCAN_STOPPED)
-	C2S(NL80211_CMD_SET_REKEY_OFFLOAD)
-	C2S(NL80211_CMD_PMKSA_CANDIDATE)
-	C2S(NL80211_CMD_TDLS_OPER)
-	C2S(NL80211_CMD_TDLS_MGMT)
-	C2S(NL80211_CMD_UNEXPECTED_FRAME)
-	C2S(NL80211_CMD_PROBE_CLIENT)
-	C2S(NL80211_CMD_REGISTER_BEACONS)
-	C2S(NL80211_CMD_UNEXPECTED_4ADDR_FRAME)
-	C2S(NL80211_CMD_SET_NOACK_MAP)
-	C2S(NL80211_CMD_CH_SWITCH_NOTIFY)
-	C2S(NL80211_CMD_START_P2P_DEVICE)
-	C2S(NL80211_CMD_STOP_P2P_DEVICE)
-	C2S(NL80211_CMD_CONN_FAILED)
-	C2S(NL80211_CMD_SET_MCAST_RATE)
-	C2S(NL80211_CMD_SET_MAC_ACL)
-	C2S(NL80211_CMD_RADAR_DETECT)
-	C2S(NL80211_CMD_GET_PROTOCOL_FEATURES)
-	C2S(NL80211_CMD_UPDATE_FT_IES)
-	C2S(NL80211_CMD_FT_EVENT)
-	C2S(NL80211_CMD_CRIT_PROTOCOL_START)
-	C2S(NL80211_CMD_CRIT_PROTOCOL_STOP)
-	C2S(NL80211_CMD_GET_COALESCE)
-	C2S(NL80211_CMD_SET_COALESCE)
-	C2S(NL80211_CMD_CHANNEL_SWITCH)
-	C2S(NL80211_CMD_VENDOR)
-	C2S(NL80211_CMD_SET_QOS_MAP)
-	default:
-		return "NL80211_CMD_UNKNOWN";
-	}
+static const char *nl80211_command_to_string(enum nl80211_commands cmd) {
+#define C2S(x)                                                                 \
+  case x:                                                                      \
+    return #x;
+  switch (cmd) {
+    C2S(NL80211_CMD_UNSPEC)
+    C2S(NL80211_CMD_GET_WIPHY)
+    C2S(NL80211_CMD_SET_WIPHY)
+    C2S(NL80211_CMD_NEW_WIPHY)
+    C2S(NL80211_CMD_DEL_WIPHY)
+    C2S(NL80211_CMD_GET_INTERFACE)
+    C2S(NL80211_CMD_SET_INTERFACE)
+    C2S(NL80211_CMD_NEW_INTERFACE)
+    C2S(NL80211_CMD_DEL_INTERFACE)
+    C2S(NL80211_CMD_GET_KEY)
+    C2S(NL80211_CMD_SET_KEY)
+    C2S(NL80211_CMD_NEW_KEY)
+    C2S(NL80211_CMD_DEL_KEY)
+    C2S(NL80211_CMD_GET_BEACON)
+    C2S(NL80211_CMD_SET_BEACON)
+    C2S(NL80211_CMD_START_AP)
+    C2S(NL80211_CMD_STOP_AP)
+    C2S(NL80211_CMD_GET_STATION)
+    C2S(NL80211_CMD_SET_STATION)
+    C2S(NL80211_CMD_NEW_STATION)
+    C2S(NL80211_CMD_DEL_STATION)
+    C2S(NL80211_CMD_GET_MPATH)
+    C2S(NL80211_CMD_SET_MPATH)
+    C2S(NL80211_CMD_NEW_MPATH)
+    C2S(NL80211_CMD_DEL_MPATH)
+    C2S(NL80211_CMD_SET_BSS)
+    C2S(NL80211_CMD_SET_REG)
+    C2S(NL80211_CMD_REQ_SET_REG)
+    C2S(NL80211_CMD_GET_MESH_CONFIG)
+    C2S(NL80211_CMD_SET_MESH_CONFIG)
+    C2S(NL80211_CMD_SET_MGMT_EXTRA_IE)
+    C2S(NL80211_CMD_GET_REG)
+    C2S(NL80211_CMD_GET_SCAN)
+    C2S(NL80211_CMD_TRIGGER_SCAN)
+    C2S(NL80211_CMD_NEW_SCAN_RESULTS)
+    C2S(NL80211_CMD_SCAN_ABORTED)
+    C2S(NL80211_CMD_REG_CHANGE)
+    C2S(NL80211_CMD_AUTHENTICATE)
+    C2S(NL80211_CMD_ASSOCIATE)
+    C2S(NL80211_CMD_DEAUTHENTICATE)
+    C2S(NL80211_CMD_DISASSOCIATE)
+    C2S(NL80211_CMD_MICHAEL_MIC_FAILURE)
+    C2S(NL80211_CMD_REG_BEACON_HINT)
+    C2S(NL80211_CMD_JOIN_IBSS)
+    C2S(NL80211_CMD_LEAVE_IBSS)
+    C2S(NL80211_CMD_TESTMODE)
+    C2S(NL80211_CMD_CONNECT)
+    C2S(NL80211_CMD_ROAM)
+    C2S(NL80211_CMD_DISCONNECT)
+    C2S(NL80211_CMD_SET_WIPHY_NETNS)
+    C2S(NL80211_CMD_GET_SURVEY)
+    C2S(NL80211_CMD_NEW_SURVEY_RESULTS)
+    C2S(NL80211_CMD_SET_PMKSA)
+    C2S(NL80211_CMD_DEL_PMKSA)
+    C2S(NL80211_CMD_FLUSH_PMKSA)
+    C2S(NL80211_CMD_REMAIN_ON_CHANNEL)
+    C2S(NL80211_CMD_CANCEL_REMAIN_ON_CHANNEL)
+    C2S(NL80211_CMD_SET_TX_BITRATE_MASK)
+    C2S(NL80211_CMD_REGISTER_FRAME)
+    C2S(NL80211_CMD_FRAME)
+    C2S(NL80211_CMD_FRAME_TX_STATUS)
+    C2S(NL80211_CMD_SET_POWER_SAVE)
+    C2S(NL80211_CMD_GET_POWER_SAVE)
+    C2S(NL80211_CMD_SET_CQM)
+    C2S(NL80211_CMD_NOTIFY_CQM)
+    C2S(NL80211_CMD_SET_CHANNEL)
+    C2S(NL80211_CMD_SET_WDS_PEER)
+    C2S(NL80211_CMD_FRAME_WAIT_CANCEL)
+    C2S(NL80211_CMD_JOIN_MESH)
+    C2S(NL80211_CMD_LEAVE_MESH)
+    C2S(NL80211_CMD_UNPROT_DEAUTHENTICATE)
+    C2S(NL80211_CMD_UNPROT_DISASSOCIATE)
+    C2S(NL80211_CMD_NEW_PEER_CANDIDATE)
+    C2S(NL80211_CMD_GET_WOWLAN)
+    C2S(NL80211_CMD_SET_WOWLAN)
+    C2S(NL80211_CMD_START_SCHED_SCAN)
+    C2S(NL80211_CMD_STOP_SCHED_SCAN)
+    C2S(NL80211_CMD_SCHED_SCAN_RESULTS)
+    C2S(NL80211_CMD_SCHED_SCAN_STOPPED)
+    C2S(NL80211_CMD_SET_REKEY_OFFLOAD)
+    C2S(NL80211_CMD_PMKSA_CANDIDATE)
+    C2S(NL80211_CMD_TDLS_OPER)
+    C2S(NL80211_CMD_TDLS_MGMT)
+    C2S(NL80211_CMD_UNEXPECTED_FRAME)
+    C2S(NL80211_CMD_PROBE_CLIENT)
+    C2S(NL80211_CMD_REGISTER_BEACONS)
+    C2S(NL80211_CMD_UNEXPECTED_4ADDR_FRAME)
+    C2S(NL80211_CMD_SET_NOACK_MAP)
+    C2S(NL80211_CMD_CH_SWITCH_NOTIFY)
+    C2S(NL80211_CMD_START_P2P_DEVICE)
+    C2S(NL80211_CMD_STOP_P2P_DEVICE)
+    C2S(NL80211_CMD_CONN_FAILED)
+    C2S(NL80211_CMD_SET_MCAST_RATE)
+    C2S(NL80211_CMD_SET_MAC_ACL)
+    C2S(NL80211_CMD_RADAR_DETECT)
+    C2S(NL80211_CMD_GET_PROTOCOL_FEATURES)
+    C2S(NL80211_CMD_UPDATE_FT_IES)
+    C2S(NL80211_CMD_FT_EVENT)
+    C2S(NL80211_CMD_CRIT_PROTOCOL_START)
+    C2S(NL80211_CMD_CRIT_PROTOCOL_STOP)
+    C2S(NL80211_CMD_GET_COALESCE)
+    C2S(NL80211_CMD_SET_COALESCE)
+    C2S(NL80211_CMD_CHANNEL_SWITCH)
+    C2S(NL80211_CMD_VENDOR)
+    C2S(NL80211_CMD_SET_QOS_MAP)
+  default:
+    return "NL80211_CMD_UNKNOWN";
+  }
 #undef C2S
 }
 
 static int nl80211_handler(struct nl_msg *msg, void *arg) {
-	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
-	struct nlattr *tb[NL80211_ATTR_MAX + 1];
-	int ifidx = -1;
-	struct i802_bss *bss;
-	long long wdev_id = 0;
-	int wdev_id_set = 0;
-	struct nlattr *nl;
-	int rem;
+  struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+  struct nlattr *tb[NL80211_ATTR_MAX + 1];
+  int ifidx = -1;
+  struct i802_bss *bss;
+  long long wdev_id = 0;
+  int wdev_id_set = 0;
+  struct nlattr *nl;
+  int rem;
 
-	nla_parse(tb, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
-		  genlmsg_attrlen(gnlh, 0), NULL);
+  nla_parse(tb, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
+            genlmsg_attrlen(gnlh, 0), NULL);
 
-	if (tb[NL80211_ATTR_IFINDEX])
-		ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
-	/* if (tb[NL80211_ATTR_WDEV]) { */
-	/* 	wdev_id = nla_get_u64(tb[NL80211_ATTR_WDEV]); */
-	/* 	wdev_id_set = 1; */
-	/* } */
+  if (tb[NL80211_ATTR_IFINDEX])
+    ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
+  /* if (tb[NL80211_ATTR_WDEV]) { */
+  /* 	wdev_id = nla_get_u64(tb[NL80211_ATTR_WDEV]); */
+  /* 	wdev_id_set = 1; */
+  /* } */
 
-	printf("ifidx: %d wdev_id: %lld wdev_id_set: %d\n", ifidx, wdev_id, wdev_id_set);
-	printf("cmd: %s\n", nl80211_command_to_string(gnlh->cmd));
-	if (tb[NL80211_ATTR_SCAN_SSIDS]) {
-		int num_ssids = 0;
-		nla_for_each_nested(nl, tb[NL80211_ATTR_SCAN_SSIDS], rem) {
-			printf("ssid: %s\n", (char*)nla_data(nl));
-			num_ssids++;
-		}
-		printf("num_ssids: %d\n", num_ssids);
-	}
+  printf("ifidx: %d wdev_id: %lld wdev_id_set: %d\n", ifidx, wdev_id,
+         wdev_id_set);
+  printf("cmd: %s\n", nl80211_command_to_string(gnlh->cmd));
+  if (tb[NL80211_ATTR_SCAN_SSIDS]) {
+    int num_ssids = 0;
+    nla_for_each_nested(nl, tb[NL80211_ATTR_SCAN_SSIDS], rem) {
+      printf("ssid: %s\n", (char *)nla_data(nl));
+      num_ssids++;
+    }
+    printf("num_ssids: %d\n", num_ssids);
+  }
 
-	switch (gnlh->cmd) {
-	case NL80211_CMD_DEAUTHENTICATE:
-		printf("DEAUTHENTICATE\n");
-		break;
-	case NL80211_CMD_AUTHENTICATE:
-		printf("AUTHENTICATE\n");
-		break;
-	}
-	/* dl_list_for_each_safe(drv, tmp, &global->interfaces, */
-	/* 		      struct wpa_driver_nl80211_data, list) { */
-	/* 	for (bss = drv->first_bss; bss; bss = bss->next) { */
-	/* 		if ((ifidx == -1 && !wdev_id_set) || */
-	/* 		    ifidx == bss->ifindex || */
-	/* 		    (wdev_id_set && bss->wdev_id_set && */
-	/* 		     wdev_id == bss->wdev_id)) { */
-	/* 			do_process_drv_event(bss, gnlh->cmd, tb); */
-	/* 			return NL_SKIP; */
-	/* 		} */
-	/* 	} */
-	/* } */
+  switch (gnlh->cmd) {
+  case NL80211_CMD_DEAUTHENTICATE:
+    printf("DEAUTHENTICATE\n");
+    break;
+  case NL80211_CMD_AUTHENTICATE:
+    printf("AUTHENTICATE\n");
+    break;
+  }
+  /* dl_list_for_each_safe(drv, tmp, &global->interfaces, */
+  /* 		      struct wpa_driver_nl80211_data, list) { */
+  /* 	for (bss = drv->first_bss; bss; bss = bss->next) { */
+  /* 		if ((ifidx == -1 && !wdev_id_set) || */
+  /* 		    ifidx == bss->ifindex || */
+  /* 		    (wdev_id_set && bss->wdev_id_set && */
+  /* 		     wdev_id == bss->wdev_id)) { */
+  /* 			do_process_drv_event(bss, gnlh->cmd, tb); */
+  /* 			return NL_SKIP; */
+  /* 		} */
+  /* 	} */
+  /* } */
 
-	return NL_SKIP;
+  return NL_SKIP;
 }
 
 struct nl_sock *setup_nl80211(struct nl_sock *sock) {
@@ -442,7 +447,10 @@ int main(int argc, char **argv) {
   struct nl_sock *rtnl_sock;
   struct nl_sock *genl_sock;
   struct nl_sock *event_sock;
-  int r;
+  int r, n;
+  int rtnl_fd, nl80211_fd, conn_sock, nfds, epollfd;
+#define MAX_EVENTS 10
+  struct epoll_event ev, events[MAX_EVENTS];
 
   rtnl_sock = nl_socket_alloc();
   if (rtnl_sock == NULL) {
@@ -460,13 +468,40 @@ int main(int argc, char **argv) {
   nl_socket_set_buffer_size(genl_sock, 8192, 8192);
   event_sock = setup_nl80211(genl_sock);
 
+  rtnl_fd = nl_cache_mngr_get_fd(rtnl_mngr);
+  nl80211_fd = nl_socket_get_fd(event_sock);
+
+  epollfd = epoll_create1(0);
+  if (epollfd == -1) {
+    perror("epoll_create1");
+    exit(1);
+  }
+  ev.events = EPOLLIN;
+  ev.data.fd = rtnl_fd;
+  if (epoll_ctl(epollfd, EPOLL_CTL_ADD, rtnl_fd, &ev) == -1) {
+    perror("epoll_ctl");
+    exit(1);
+  }
+  ev.events = EPOLLIN;
+  ev.data.fd = nl80211_fd;
+  if (epoll_ctl(epollfd, EPOLL_CTL_ADD, nl80211_fd, &ev) == -1) {
+    perror("epoll_ctl");
+    exit(1);
+  }
+
   while (1) {
-    r = nl_cache_mngr_poll(rtnl_mngr, 1000);
-    if (r < 0) {
-      fprintf(stderr, "nl_cache_mngr_poll failed %d\n", r);
-      exit(1);
+    nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
+    if (nfds == -1) {
+      perror("epoll_wait");
+      exit(EXIT_FAILURE);
     }
-    printf(".\n");
-    nl_recvmsgs_default(event_sock);
+
+    for (n = 0; n < nfds; ++n) {
+      if (events[n].data.fd == rtnl_fd) {
+        nl_cache_mngr_data_ready(rtnl_mngr);
+      } else if (events[n].data.fd == nl80211_fd) {
+        nl_recvmsgs_default(event_sock);
+      }
+    }
   }
 }
