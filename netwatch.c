@@ -100,13 +100,13 @@ struct nl_cache_mngr *setup_rtnl(struct nl_sock *sock) {
   return mngr;
 }
 
-struct nl8022_multicast_ids {
+struct nl80211_multicast_ids {
   int mlme_id;
   int scan_id;
 };
 
 static int family_handler(struct nl_msg *msg, void *arg) {
-  struct nl8022_multicast_ids *res = arg;
+  struct nl80211_multicast_ids *res = arg;
   struct nlattr *tb[CTRL_ATTR_MAX + 1];
   struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
   struct nlattr *mcgrp;
@@ -180,7 +180,7 @@ static int send_and_recv(struct nl_sock *genl_sock, struct nl_msg *msg,
   nl_cb_err(cb, NL_CB_CUSTOM, error_handler, &err);
   nl_cb_set(cb, NL_CB_FINISH, NL_CB_CUSTOM, finish_handler, &err);
   nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, ack_handler, &err);
-  nl_cb_set(cb, NL_CB_SEQ_CHECK, NL_CB_CUSTOM, no_seq_check, NULL);
+//  nl_cb_set(cb, NL_CB_SEQ_CHECK, NL_CB_CUSTOM, no_seq_check, NULL);
 
   if (valid_handler) {
     nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, valid_handler, valid_data);
@@ -198,10 +198,9 @@ out:
   return err;
 }
 
-static int nl_get_multicast_id(struct nl_sock *genl_sock) {
+static int nl_get_multicast_ids(struct nl_sock *genl_sock,   struct nl80211_multicast_ids *res) {
   struct nl_msg *msg;
   int ret = -1;
-  struct nl8022_multicast_ids res;
 
   msg = nlmsg_alloc();
   if (!msg)
@@ -210,7 +209,7 @@ static int nl_get_multicast_id(struct nl_sock *genl_sock) {
               CTRL_CMD_GETFAMILY, 0);
   NLA_PUT_STRING(msg, CTRL_ATTR_FAMILY_NAME, "nl80211");
 
-  ret = send_and_recv(genl_sock, msg, family_handler, &res);
+  ret = send_and_recv(genl_sock, msg, family_handler, res);
   msg = NULL;
 
 nla_put_failure:
@@ -218,13 +217,21 @@ nla_put_failure:
   return ret;
 }
 
-struct nl_cache_mngr *setup_nl80211(struct nl_sock *sock) {
+static int nl80211_handler(struct nl_msg *msg, void *arg) {
+	printf("nl80211_handler\n");
+}
+
+struct nl_sock *setup_nl80211(struct nl_sock *sock) {
+  struct nl_sock *event_sock;
+  struct nl_cb *event_cb;
   int nl80211_id;
+  struct nl80211_multicast_ids ids;
   int r;
 
   r = genl_connect(sock);
   if (r < 0) {
     fprintf(stderr, "genl_connect failed: %d\n", r);
+    exit(1);
   }
   nl80211_id = genl_ctrl_resolve(sock, "nl80211");
   if (nl80211_id < 0) {
@@ -232,14 +239,42 @@ struct nl_cache_mngr *setup_nl80211(struct nl_sock *sock) {
     exit(1);
   }
   printf("nl80211_id: %d\n", nl80211_id);
-  
-  printf("multicast_id: %d\n", nl_get_multicast_id(sock));
+  nl_get_multicast_ids(sock, &ids);
+  printf("multicast_ids: mlme: %d, scan: %d\n", ids.mlme_id, ids.scan_id);
+
+  int err;
+  event_cb = nl_cb_alloc(NL_CB_DEFAULT);
+  nl_cb_err(event_cb, NL_CB_CUSTOM, error_handler, &err);
+  nl_cb_set(event_cb, NL_CB_FINISH, NL_CB_CUSTOM, finish_handler, &err);
+  nl_cb_set(event_cb, NL_CB_ACK, NL_CB_CUSTOM, ack_handler, &err);
+  nl_cb_set(event_cb, NL_CB_SEQ_CHECK, NL_CB_CUSTOM, no_seq_check, NULL);
+  nl_cb_set(event_cb, NL_CB_VALID, NL_CB_CUSTOM, nl80211_handler, NULL);
+
+  event_sock = nl_socket_alloc_cb(event_cb);
+  r = genl_connect(event_sock);
+  if (r < 0) {
+    fprintf(stderr, "genl_connect failed: %d\n", r);
+    exit(1);
+  }
+  r = nl_socket_set_nonblocking(event_sock);
+  if (r < 0) {
+    fprintf(stderr, "nl_socket_set_nonblocking failed %d\n", r);
+    exit(1);
+  }
+  r = nl_socket_add_memberships(event_sock, ids.mlme_id, ids.scan_id, 0);
+  if (r < 0) {
+    fprintf(stderr, "nl_socket_add_memberships failed %d\n", r);
+    exit(1);
+  }
+
+  return event_sock;
 }
 
 int main(int argc, char **argv) {
   struct nl_cache_mngr *rtnl_mngr;
   struct nl_sock *rtnl_sock;
   struct nl_sock *genl_sock;
+  struct nl_sock *event_sock;
   int r;
 
   rtnl_sock = nl_socket_alloc();
@@ -256,13 +291,15 @@ int main(int argc, char **argv) {
     exit(1);
   }
   nl_socket_set_buffer_size(genl_sock, 8192, 8192);
-  setup_nl80211(genl_sock);
+  event_sock = setup_nl80211(genl_sock);
 
   while (1) {
-    r = nl_cache_mngr_poll(rtnl_mngr, 100000);
+    r = nl_cache_mngr_poll(rtnl_mngr, 1000);
     if (r < 0) {
       fprintf(stderr, "nl_cache_mngr_poll failed %d\n", r);
       exit(1);
     }
+    printf(".\n");
+    nl_recvmsgs_default(event_sock);
   }
 }
