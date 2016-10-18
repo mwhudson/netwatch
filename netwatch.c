@@ -28,7 +28,8 @@ static char *act2str(int act) {
 
 static void dump_link_info(int act, struct rtnl_link *link) {
   printf("link act: %-6s ifindex: %2d ifname: %s flags: 0x%08x\n", act2str(act),
-         rtnl_link_get_ifindex(link), rtnl_link_get_name(link), rtnl_link_get_flags(link));
+         rtnl_link_get_ifindex(link), rtnl_link_get_name(link),
+         rtnl_link_get_flags(link));
 }
 
 static void cb_link(struct nl_cache *cache, struct nl_object *ob, int act,
@@ -365,7 +366,16 @@ static int nl80211_handler(struct nl_msg *msg, void *arg) {
 
   if (tb[NL80211_ATTR_IFINDEX]) {
     ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
-  } else {
+  }
+
+  if (gnlh->cmd == NL80211_CMD_NEW_INTERFACE) {
+    if (ifidx > 0) {
+      printf("nl802011 new interface ifidx: %d\n", ifidx);
+    }
+    return NL_SKIP;
+  }
+
+  if (ifidx < 0) {
     printf("nl80211 message for unknown interface");
   }
 
@@ -387,6 +397,17 @@ struct nl_sock *setup_nl80211(struct nl_sock *sock) {
     fprintf(stderr, "genl_connect failed: %d\n", r);
     exit(1);
   }
+  nl80211_id = genl_ctrl_resolve(sock, "nl80211");
+  struct nl_msg *msg;
+  msg = nlmsg_alloc();
+  if (!msg)
+    return NULL;
+  genlmsg_put(msg, 0, 0, nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_INTERFACE,
+              0);
+
+  send_and_recv(sock, msg, nl80211_handler, NULL);
+
+  msg = NULL;
   nl_get_multicast_ids(sock, &ids);
 
   int err;
