@@ -452,7 +452,32 @@ static int nl80211_scan_handler(struct nl_msg *msg, void *arg) {
 
   return NL_SKIP;
 }
+static int nl80211_handler(struct nl_msg *msg, void *arg);
+static int nl80211_trigger_scan(struct nl_sock *sock, int ifidx) {
+  struct nl_msg *msg;
+  struct nl_msg *ssids = NULL;
+  msg = nlmsg_alloc();
+  if (!msg) {
+    goto nla_put_failure;
+  }
+  printf("triggering scan on %d\n", ifidx);
+  genlmsg_put(msg, 0, 0, nl80211_id, 0, 0, NL80211_CMD_TRIGGER_SCAN, 0);
+  NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
+  ssids = nlmsg_alloc();
+  if (!ssids) {
+    goto nla_put_failure;
+  }
+  NLA_PUT(ssids, 1, 0, "");
+  nla_put_nested(msg, NL80211_ATTR_SCAN_SSIDS, ssids);
 
+  send_and_recv(sock, msg, nl80211_handler, sock);
+  printf("triggered scan on %d\n", ifidx);
+  msg = NULL;
+nla_put_failure:
+  nlmsg_free(msg);
+  nlmsg_free(ssids);
+  return NL_SKIP;
+}
 static int nl80211_handler(struct nl_msg *msg, void *arg) {
   struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
   struct nlattr *tb[NL80211_ATTR_MAX + 1];
@@ -462,6 +487,7 @@ static int nl80211_handler(struct nl_msg *msg, void *arg) {
   int wdev_id_set = 0;
   struct nlattr *nl;
   int rem;
+  struct nl_sock *sock = arg;
 
   nla_parse(tb, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
             genlmsg_attrlen(gnlh, 0), NULL);
@@ -478,25 +504,13 @@ static int nl80211_handler(struct nl_msg *msg, void *arg) {
       return NL_SKIP;
     }
     printf("nl802011 new interface ifidx: %d\n", ifidx);
-    struct nl_sock *sock = arg;
-    struct nl_msg *msg;
-    msg = nlmsg_alloc();
-    if (!msg)
-      return NL_SKIP;
-    printf("triggering scan on %d\n", ifidx);
-    genlmsg_put(msg, 0, 0, nl80211_id, 0, 0, NL80211_CMD_TRIGGER_SCAN, 0);
-    NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
-
-    send_and_recv(sock, msg, nl80211_handler, sock);
-    printf("triggered scan on %d\n", ifidx);
-    msg = NULL;
+    nl80211_trigger_scan(sock, ifidx);
   }
   if (gnlh->cmd == NL80211_CMD_NEW_SCAN_RESULTS) {
     if (ifidx < 0) {
       return NL_SKIP;
     }
     printf("nl802011 new scan results on ifidx: %d\n", ifidx);
-    struct nl_sock *sock = arg;
     struct nl_msg *msg;
     msg = nlmsg_alloc();
     if (!msg)
@@ -511,7 +525,7 @@ static int nl80211_handler(struct nl_msg *msg, void *arg) {
   }
 
   if (tb[NL80211_ATTR_BSS]) {
-	  maybe_print_ssid(ifidx, tb[NL80211_ATTR_BSS]);
+    maybe_print_ssid(ifidx, tb[NL80211_ATTR_BSS]);
   }
 
   return NL_SKIP;
@@ -529,16 +543,7 @@ struct nl_sock *setup_nl80211(struct nl_sock *sock) {
     exit(1);
   }
   nl80211_id = genl_ctrl_resolve(sock, "nl80211");
-  struct nl_msg *msg;
-  msg = nlmsg_alloc();
-  if (!msg)
-    return NULL;
-  genlmsg_put(msg, 0, 0, nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_INTERFACE,
-              0);
 
-  send_and_recv(sock, msg, nl80211_handler, sock);
-
-  msg = NULL;
   nl_get_multicast_ids(sock, &ids);
 
   int err;
@@ -565,6 +570,16 @@ struct nl_sock *setup_nl80211(struct nl_sock *sock) {
     fprintf(stderr, "nl_socket_add_memberships failed %d\n", r);
     exit(1);
   }
+
+  struct nl_msg *msg;
+  msg = nlmsg_alloc();
+  if (!msg)
+    return NULL;
+  genlmsg_put(msg, 0, 0, nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_INTERFACE,
+              0);
+
+  send_and_recv(sock, msg, nl80211_handler, sock);
+  msg = NULL;
 
   return event_sock;
 }
