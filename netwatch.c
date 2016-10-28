@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <errno.h>
 
 #include <netlink/cache.h>
@@ -10,6 +11,10 @@
 #include <linux/nl80211.h>
 
 #include <sys/epoll.h>
+
+int nl80211_id;
+
+#define NL_CB_me NL_CB_DEFAULT
 
 static char *act2str(int act) {
 #define C2S(x)                                                                 \
@@ -27,9 +32,9 @@ static char *act2str(int act) {
 }
 
 static void dump_link_info(int act, struct rtnl_link *link) {
-  printf("link act: %-6s ifindex: %2d ifname: %s flags: 0x%08x\n", act2str(act),
-         rtnl_link_get_ifindex(link), rtnl_link_get_name(link),
-         rtnl_link_get_flags(link));
+  printf("link act: %-6s ifindex: %2d ifname: %s flags: 0x%08x type: %d\n",
+         act2str(act), rtnl_link_get_ifindex(link), rtnl_link_get_name(link),
+         rtnl_link_get_flags(link), rtnl_link_get_arptype(link));
 }
 
 static void cb_link(struct nl_cache *cache, struct nl_object *ob, int act,
@@ -185,7 +190,7 @@ static int send_and_recv(struct nl_sock *genl_sock, struct nl_msg *msg,
   struct nl_cb *cb;
   int err = -ENOMEM;
 
-  cb = nl_cb_alloc(NL_CB_DEFAULT);
+  cb = nl_cb_alloc(NL_CB_me);
   if (!cb)
     goto out;
 
@@ -351,6 +356,103 @@ static const char *nl80211_command_to_string(enum nl80211_commands cmd) {
 #undef C2S
 }
 
+static char *nl80211_get_ie(char *ies, size_t ies_len, char ie) {
+  char *end, *pos;
+
+  if (ies == NULL)
+    return NULL;
+
+  pos = ies;
+  end = ies + ies_len;
+
+  while (pos + 1 < end) {
+    if (pos + 2 + pos[1] > end)
+      break;
+    if (pos[0] == ie)
+      return pos;
+    pos += 2 + pos[1];
+  }
+
+  return NULL;
+}
+
+static void bindump(char *label, char *data, int len) {
+  printf("%s: [", label);
+  char *p = data;
+  int l = 0;
+  while (l < len) {
+    printf("%02hhx", *p);
+    if (isgraph(*p)) {
+      printf("%c", *p);
+    } else {
+      printf("-");
+    }
+    l++;
+    p++;
+  }
+  printf("]\n");
+}
+
+static void maybe_print_ssid(int ifindex, struct nlattr *data) {
+  struct nlattr *bss[NL80211_BSS_MAX + 1];
+  static struct nla_policy bss_policy[NL80211_BSS_MAX + 1] = {
+          [NL80211_BSS_INFORMATION_ELEMENTS] = {},
+          [NL80211_BSS_STATUS] = {.type = NLA_U32}, [NL80211_BSS_BSSID] = {},
+  };
+  if (nla_parse_nested(bss, NL80211_BSS_MAX, data, bss_policy))
+    return;
+  char *cstatus = "no status";
+  if (bss[NL80211_BSS_STATUS]) {
+    int status = -1;
+    status = nla_get_u32(bss[NL80211_BSS_STATUS]);
+    switch (status) {
+    case NL80211_BSS_STATUS_ASSOCIATED:
+      cstatus = "Connected";
+      break;
+    case NL80211_BSS_STATUS_AUTHENTICATED:
+      cstatus = "Authenticated";
+      break;
+    case NL80211_BSS_STATUS_IBSS_JOINED:
+      cstatus = "Joined";
+      break;
+    }
+  }
+  char *ie = nla_data(bss[NL80211_BSS_INFORMATION_ELEMENTS]);
+  int ie_len = nla_len(bss[NL80211_BSS_INFORMATION_ELEMENTS]);
+  // bindump("ies", ie, ie_len);
+  char *ssid = nl80211_get_ie(ie, ie_len, 0);
+  int ssid_len = ssid[1];
+  char *ssid_str = malloc(ssid_len + 1);
+  memcpy(ssid_str, ssid + 2, ssid_len);
+  ssid_str[ssid_len] = 0;
+  if (ssid != NULL) {
+    printf("ifindex: %d ssid: %-32s (%s)\n", ifindex, ssid_str, cstatus);
+  }
+}
+
+static int nl80211_scan_handler(struct nl_msg *msg, void *arg) {
+  struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+  struct nlattr *tb[NL80211_ATTR_MAX + 1];
+  int ifidx = -1;
+
+  nla_parse(tb, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
+            genlmsg_attrlen(gnlh, 0), NULL);
+
+  if (tb[NL80211_ATTR_IFINDEX]) {
+    ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
+  }
+
+  if (ifidx < 0) {
+    return NL_SKIP;
+  }
+
+  if (tb[NL80211_ATTR_BSS]) {
+    maybe_print_ssid(ifidx, tb[NL80211_ATTR_BSS]);
+  }
+
+  return NL_SKIP;
+}
+
 static int nl80211_handler(struct nl_msg *msg, void *arg) {
   struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
   struct nlattr *tb[NL80211_ATTR_MAX + 1];
@@ -368,19 +470,49 @@ static int nl80211_handler(struct nl_msg *msg, void *arg) {
     ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
   }
 
-  if (gnlh->cmd == NL80211_CMD_NEW_INTERFACE) {
-    if (ifidx > 0) {
-      printf("nl802011 new interface ifidx: %d\n", ifidx);
-    }
-    return NL_SKIP;
-  }
-
-  if (ifidx < 0) {
-    printf("nl80211 message for unknown interface");
-  }
-
   printf("wlan ifidx: %d cmd: %s\n", ifidx,
          nl80211_command_to_string(gnlh->cmd));
+
+  if (gnlh->cmd == NL80211_CMD_NEW_INTERFACE) {
+    if (ifidx < 0) {
+      return NL_SKIP;
+    }
+    printf("nl802011 new interface ifidx: %d\n", ifidx);
+    struct nl_sock *sock = arg;
+    struct nl_msg *msg;
+    msg = nlmsg_alloc();
+    if (!msg)
+      return NL_SKIP;
+    printf("triggering scan on %d\n", ifidx);
+    genlmsg_put(msg, 0, 0, nl80211_id, 0, 0, NL80211_CMD_TRIGGER_SCAN, 0);
+    NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
+
+    send_and_recv(sock, msg, nl80211_handler, sock);
+    printf("triggered scan on %d\n", ifidx);
+    msg = NULL;
+  }
+  if (gnlh->cmd == NL80211_CMD_NEW_SCAN_RESULTS) {
+    if (ifidx < 0) {
+      return NL_SKIP;
+    }
+    printf("nl802011 new scan results on ifidx: %d\n", ifidx);
+    struct nl_sock *sock = arg;
+    struct nl_msg *msg;
+    msg = nlmsg_alloc();
+    if (!msg)
+      return NL_SKIP;
+    genlmsg_put(msg, 0, 0, nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_SCAN, 0);
+    NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
+
+    send_and_recv(sock, msg, nl80211_scan_handler, NULL);
+    msg = NULL;
+  nla_put_failure:
+    nlmsg_free(msg);
+  }
+
+  if (tb[NL80211_ATTR_BSS]) {
+	  maybe_print_ssid(ifidx, tb[NL80211_ATTR_BSS]);
+  }
 
   return NL_SKIP;
 }
@@ -388,7 +520,6 @@ static int nl80211_handler(struct nl_msg *msg, void *arg) {
 struct nl_sock *setup_nl80211(struct nl_sock *sock) {
   struct nl_sock *event_sock;
   struct nl_cb *event_cb;
-  int nl80211_id;
   struct nl80211_multicast_ids ids;
   int r;
 
@@ -405,18 +536,18 @@ struct nl_sock *setup_nl80211(struct nl_sock *sock) {
   genlmsg_put(msg, 0, 0, nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_INTERFACE,
               0);
 
-  send_and_recv(sock, msg, nl80211_handler, NULL);
+  send_and_recv(sock, msg, nl80211_handler, sock);
 
   msg = NULL;
   nl_get_multicast_ids(sock, &ids);
 
   int err;
-  event_cb = nl_cb_alloc(NL_CB_DEFAULT);
+  event_cb = nl_cb_alloc(NL_CB_me);
   nl_cb_err(event_cb, NL_CB_CUSTOM, error_handler, &err);
   nl_cb_set(event_cb, NL_CB_FINISH, NL_CB_CUSTOM, finish_handler, &err);
   nl_cb_set(event_cb, NL_CB_ACK, NL_CB_CUSTOM, ack_handler, &err);
   nl_cb_set(event_cb, NL_CB_SEQ_CHECK, NL_CB_CUSTOM, no_seq_check, NULL);
-  nl_cb_set(event_cb, NL_CB_VALID, NL_CB_CUSTOM, nl80211_handler, NULL);
+  nl_cb_set(event_cb, NL_CB_VALID, NL_CB_CUSTOM, nl80211_handler, sock);
 
   event_sock = nl_socket_alloc_cb(event_cb);
   r = genl_connect(event_sock);
@@ -439,6 +570,7 @@ struct nl_sock *setup_nl80211(struct nl_sock *sock) {
 }
 
 int main(int argc, char **argv) {
+  printf("%d: %s\n", 32, nl80211_command_to_string(32));
   struct nl_cache_mngr *rtnl_mngr;
   struct nl_sock *rtnl_sock;
   struct nl_sock *genl_sock;
@@ -457,6 +589,7 @@ int main(int argc, char **argv) {
   rtnl_mngr = setup_rtnl(rtnl_sock);
 
   genl_sock = nl_socket_alloc();
+  nl_socket_set_cb(genl_sock, nl_cb_alloc(NL_CB_me));
   if (genl_sock == NULL) {
     fprintf(stderr, "nl_socket_alloc failed\n");
     exit(1);
@@ -488,6 +621,9 @@ int main(int argc, char **argv) {
   while (1) {
     nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
     if (nfds == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
       perror("epoll_wait");
       exit(EXIT_FAILURE);
     }
