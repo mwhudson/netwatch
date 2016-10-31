@@ -71,7 +71,6 @@ static void call_link_callback(
 		goto exit;
 	}
 	Py_DECREF(ob);
-	ob = NULL;
 	if (rtnl_link_get_name(link) != NULL) {
 		ob = PyBytes_FromString(rtnl_link_get_name(link));
 		if (ob == NULL || PyDict_SetItemString(data, "name", ob) < 0) {
@@ -79,6 +78,7 @@ static void call_link_callback(
 		}
 		Py_DECREF(ob);
 	}
+	ob = NULL;
 	PyObject *r = PyObject_CallMethod(listener->callback, "link_change", "O", arg);
 	Py_XDECREF(r);
 
@@ -132,7 +132,7 @@ static void call_addr_callback(
 	struct nl_addr *local = rtnl_addr_get_local(addr);
 	if (local != NULL) {
 		char buf[100];
-		ob = PyUnicode_FromString(nl_addr2str(local, buf, 100));
+		ob = PyBytes_FromString(nl_addr2str(local, buf, 100));
 		if (ob == NULL || PyDict_SetItemString(data, "local", ob) < 0) {
 			goto exit;
 		}
