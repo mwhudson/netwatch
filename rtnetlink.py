@@ -2,6 +2,8 @@ import select
 
 import _rtnetlink
 
+_rtnetlink.listener(None)
+
 fd = _rtnetlink.start_listening()
 
 poll_ob = select.epoll()
