@@ -25,62 +25,68 @@ static char *act2str(int act) {
 #undef C2S
 }
 
-static void dump_link_info(int act, struct rtnl_link *link, PyObject* cb) {
-	printf("link act: %-6s ifindex: %2d ifname: %s flags: 0x%08x type: %d\n",
-	       act2str(act), rtnl_link_get_ifindex(link), rtnl_link_get_name(link),
-	       rtnl_link_get_flags(link), rtnl_link_get_arptype(link));
-}
-
-static void cb_link(struct nl_cache *cache, struct nl_object *ob, int act,
-                    void *data) {
-	dump_link_info(act, (struct rtnl_link *)ob, (PyObject*)data);
-}
-
-static void e_link(struct nl_object *ob, void *data) {
-	dump_link_info(NL_ACT_NEW, (struct rtnl_link *)ob, (PyObject*)data);
-}
-
-
-struct rtnetlink_listener {
+struct Listener {
 	PyObject_HEAD
 	struct nl_cache_mngr *mngr;
 	PyObject *callback;
-	PyObject *exc_tp, *exc_val, *exc_tb;
+	PyObject *exc_typ, *exc_val, *exc_tb;
 };
 
 static void call_link_callback(
 	int act,
 	struct rtnl_link *link,
-	struct rtnetlink_listener* listener)
+	struct Listener* listener)
 {
 	printf("link act: %-6s ifindex: %2d ifname: %s flags: 0x%08x type: %d\n",
 	       act2str(act), rtnl_link_get_ifindex(link), rtnl_link_get_name(link),
 	       rtnl_link_get_flags(link), rtnl_link_get_arptype(link));
-	if (listener->exc == NULL) {
-		PyObject *r = PyObject_CallFunction(listener->callback, "");
-		Py_XDECREF(r);
-		if (PyErr_Occurred()) {
-			PyE
-		}
+	if (listener->exc_typ != NULL || listener->callback == Py_None) {
+		return;
+	}
+	PyObject *arg = PyDict_New();
+	if (PyDict_SetItemString(arg, "ifindex", PyLong_FromLong(rtnl_link_get_ifindex(link))) < 0) {
+		Py_DECREF(arg);
+		goto exit;
+	}
+	PyObject *r = PyObject_CallMethod(listener->callback, "link_change", "O", arg);
+	Py_XDECREF(r);
+
+  exit:
+	if (PyErr_Occurred()) {
+		PyErr_Fetch(&listener->exc_typ, &listener->exc_val, &listener->exc_tb);
 	}
 }
 
-static void cb_link(struct nl_cache *cache, struct nl_object *ob, int act,
+static void _cb_link(struct nl_cache *cache, struct nl_object *ob, int act,
                     void *data) {
-	dump_link_info(act, (struct rtnl_link *)ob, (PyObject*)data);
+	call_link_callback(act, (struct rtnl_link *)ob, (struct Listener*)data);
 }
 
-static void e_link(struct nl_object *ob, void *data) {
-	dump_link_info(NL_ACT_NEW, (struct rtnl_link *)ob, (PyObject*)data);
+static void _e_link(struct nl_object *ob, void *data) {
+	call_link_callback(NL_ACT_NEW, (struct rtnl_link *)ob, (struct Listener*)data);
 }
 
 static void
-listener_dealloc(struct rtnetlink_listener *v) {
+listener_dealloc(PyObject *self) {
+	struct Listener* v = (struct Listener*)self;
 	PyObject_GC_UnTrack(v);
-	Py_DECREF(v->callback);
+	Py_CLEAR(v->callback);
 	nl_cache_mngr_free(v->mngr);
-	Py_XDECREF(v->exc);
+	Py_CLEAR(v->exc_typ);
+	Py_CLEAR(v->exc_val);
+	Py_CLEAR(v->exc_tb);
 	PyObject_GC_Del(v);
+}
+
+static int
+listener_traverse(PyObject *self, visitproc visit, void *arg)
+{
+	struct Listener* v = (struct Listener*)self;
+	Py_VISIT(v->callback);
+	Py_VISIT(v->exc_typ);
+	Py_VISIT(v->exc_val);
+	Py_VISIT(v->exc_tb);
+	return 0;
 }
 
 static PyTypeObject ListenerType;
@@ -88,16 +94,9 @@ static PyTypeObject ListenerType;
 static PyObject *
 listener_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 {
-	PyObject* cb;
 	struct nl_cache_mngr *mngr;
 	struct nl_cache *link_cache;
 	int r;
-
-	if (!_PyArg_NoKeywords("listener()", kw))
-		return NULL;
-
-	if (!PyArg_UnpackTuple(args, "listener", 1, 1, &cb))
-		return NULL;
 
 	r = nl_cache_mngr_alloc(NULL, NETLINK_ROUTE, NL_AUTO_PROVIDE, &mngr);
 	if (r < 0) {
@@ -108,36 +107,108 @@ listener_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 	r = rtnl_link_alloc_cache(NULL, AF_UNSPEC, &link_cache);
 	if (r < 0) {
 		nl_cache_mngr_free(mngr);
-		PyErr_Format(PyExc_MemoryError, "rtnl_link_alloc_cache_add failed %d\n", r);
+		PyErr_Format(PyExc_MemoryError, "rtnl_link_alloc_cache failed %d\n", r);
 		return NULL;
 	}
 
-	struct rtnetlink_listener* listener = (struct rtnetlink_listener*)type->tp_alloc(type, 0);
+	struct Listener* listener = (struct Listener*)type->tp_alloc(type, 0);
 
 	listener->mngr = mngr;
 
-
-	Py_INCREF(cb);
-	listener->callback = cb;
-
-	r = nl_cache_mngr_add_cache(mngr, link_cache, cb_link, listener);
-	if (r < 0) {
-		Py_DECREF(listener);
-		PyErr_Format(PyExc_RuntimeError, "nl_cache_mngr_add_cache failed %d\n", r);
-		return NULL;
-	}
+	Py_INCREF(Py_None);
+	listener->callback = Py_None;
 
 	return (PyObject*)listener;
 }
 
+static int
+listener_init(PyObject *self, PyObject *args, PyObject *kw)
+{
+	PyObject* cb;
+
+	char *kwlist[] = {"callback", 0};
+
+	if (!PyArg_ParseTupleAndKeywords(args, kw, "O:listener", kwlist, &cb))
+		return -1;
+
+	struct Listener* listener = (struct Listener*)self;
+
+	Py_CLEAR(listener->callback);
+	Py_INCREF(cb);
+	listener->callback = cb;
+
+	return 0;
+}
+
+static PyObject*
+maybe_restore(struct Listener* listener) {
+	if (listener->exc_typ != NULL) {
+		PyErr_Restore(listener->exc_typ, listener->exc_val, listener->exc_tb);
+		listener->exc_typ = listener->exc_val = listener->exc_tb = NULL;
+		return NULL;
+	}
+	Py_RETURN_NONE;
+}
+
+static PyObject*
+listener_start(PyObject *self, PyObject* args)
+{
+	struct nl_cache *link_cache;
+	struct Listener* listener = (struct Listener*)self;
+	int r;
+
+	r = rtnl_link_alloc_cache(NULL, AF_UNSPEC, &link_cache);
+	if (r < 0) {
+		PyErr_Format(PyExc_MemoryError, "rtnl_link_alloc_cache failed %d\n", r);
+		return NULL;
+	}
+
+	r = nl_cache_mngr_add_cache(listener->mngr, link_cache, _cb_link, listener);
+	if (r < 0) {
+		nl_cache_free(link_cache);
+		PyErr_Format(PyExc_RuntimeError, "nl_cache_mngr_add_cache failed %d\n", r);
+		return NULL;
+	}
+
+	nl_cache_foreach(link_cache, _e_link, self);
+
+	return maybe_restore(listener);
+}
+
+static PyObject*
+listener_fileno(PyObject *self, PyObject* args)
+{
+	struct Listener* listener = (struct Listener*)self;
+	return PyLong_FromLong(nl_cache_mngr_get_fd(listener->mngr));
+}
+
+static PyObject*
+listener_data_ready(PyObject *self, PyObject* args)
+{
+	struct Listener* listener = (struct Listener*)self;
+        nl_cache_mngr_data_ready(listener->mngr);
+	return maybe_restore(listener);
+}
+
+static PyMethodDef ListenerMethods[] = {
+	{"start", listener_start, METH_NOARGS, "XXX."},
+	{"fileno", listener_fileno, METH_NOARGS, "XXX."},
+	{"data_ready", listener_data_ready, METH_NOARGS, "XXX."},
+	{},
+};
+
 static PyTypeObject ListenerType = {
 	.ob_base = PyVarObject_HEAD_INIT(&PyType_Type, 0)
-	.tp_name = "listener",
-	.tp_basicsize = sizeof(struct rtnetlink_listener),
+	.tp_name = "_rtnetlink.listener",
+	.tp_basicsize = sizeof(struct Listener),
 
-	.tp_dealloc = (destructor)listener_dealloc,
+	.tp_dealloc = listener_dealloc,
 	.tp_new = listener_new,
+	.tp_init = listener_init,
+	.tp_traverse = listener_traverse,
+
 	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+	.tp_methods = ListenerMethods,
 };
 
 //static char buf[100];
@@ -156,27 +227,6 @@ static PyTypeObject ListenerType = {
 //static void e_addr(struct nl_object *ob, void *data) {
 //  dump_addr_info(NL_ACT_NEW, (struct rtnl_addr *)ob);
 //}
-
-struct nl_cache *add_link_cache(
-	struct nl_cache_mngr *mngr,
-	PyObject* cb) {
-  struct nl_cache *link_cache;
-  int r;
-
-  r = rtnl_link_alloc_cache(NULL, AF_UNSPEC, &link_cache);
-  if (r < 0) {
-    fprintf(stderr, "rtnl_link_alloc_cache_add failed %d\n", r);
-    exit(1);
-  }
-
-  r = nl_cache_mngr_add_cache(mngr, link_cache, cb_link, cb);
-  if (r < 0) {
-    fprintf(stderr, "nl_cache_mngr_add_cache failed %d\n", r);
-    exit(1);
-  }
-
-  return link_cache;
-}
 
 //struct nl_cache *add_addr_cache(struct nl_sock *sock,
 //                                struct nl_cache_mngr *mngr) {
@@ -198,61 +248,11 @@ struct nl_cache *add_link_cache(
 //  return addr_cache;
 //}
 
-struct nl_cache_mngr *setup_rtnl(PyObject *cb) {
-  struct nl_cache_mngr *mngr;
-  struct nl_cache *link_cache;
-//  struct nl_cache *addr_cache;
-  int r;
-
-  r = nl_cache_mngr_alloc(NULL, NETLINK_ROUTE, NL_AUTO_PROVIDE, &mngr);
-  if (r < 0) {
-	  PyErr_Format(PyExc_MemoryError, "nl_cache_mngr_alloc failed %d", r);
-	  return NULL;
-  }
-
-  link_cache = add_link_cache(mngr, cb);
-//  addr_cache = add_addr_cache(sock, mngr);
-
-  nl_cache_foreach(link_cache, e_link, cb);
-//  nl_cache_foreach(addr_cache, e_addr, NULL);
-
-  return mngr;
-}
-
-struct nl_cache_mngr *rtnl_mngr;
-
-static PyObject *
-start_listening(PyObject *self, PyObject *cb)
-{
-
-	rtnl_mngr = setup_rtnl(cb);
-	if (rtnl_mngr == NULL) {
-		return NULL;
-	}
-
-	return PyLong_FromLong(nl_cache_mngr_get_fd(rtnl_mngr));
-}
-
-static PyObject *
-data_ready(PyObject *self, PyObject *cb)
-{
-        nl_cache_mngr_data_ready(rtnl_mngr);
-	Py_RETURN_NONE;
-}
-
-
-static PyMethodDef rtnetlink_methods[] = {
-    {"start_listening",  start_listening, METH_VARARGS, "XXX."},
-    {"data_ready",  data_ready, METH_NOARGS, "XXX."},
-    {NULL, NULL, 0, NULL}
-};
-
 static struct PyModuleDef rtnetlink_module = {
    PyModuleDef_HEAD_INIT,
    "_rtnetlink",
    NULL,
    -1,
-   rtnetlink_methods,
 };
 
 PyMODINIT_FUNC
