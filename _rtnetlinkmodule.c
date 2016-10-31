@@ -37,21 +37,54 @@ static void call_link_callback(
 	struct rtnl_link *link,
 	struct Listener* listener)
 {
-	printf("link act: %-6s ifindex: %2d ifname: %s flags: 0x%08x type: %d\n",
-	       act2str(act), rtnl_link_get_ifindex(link), rtnl_link_get_name(link),
-	       rtnl_link_get_flags(link), rtnl_link_get_arptype(link));
 	if (listener->exc_typ != NULL || listener->callback == Py_None) {
 		return;
 	}
 	PyObject *arg = PyDict_New();
-	if (PyDict_SetItemString(arg, "ifindex", PyLong_FromLong(rtnl_link_get_ifindex(link))) < 0) {
-		Py_DECREF(arg);
+	PyObject *ob = NULL;
+	PyObject *data = NULL;
+	if (arg == NULL) {
 		goto exit;
 	}
+	ob = PyUnicode_FromString(act2str(act));
+	if (ob == NULL || PyDict_SetItemString(arg, "action", ob) < 0) {
+		goto exit;
+	}
+	Py_DECREF(ob);
+	ob = PyDict_New();
+	if (ob == NULL || PyDict_SetItemString(arg, "data", ob) < 0) {
+		goto exit;
+	}
+	data = ob;
+	ob = PyLong_FromLong(rtnl_link_get_ifindex(link));
+	if (ob == NULL || PyDict_SetItemString(data, "ifindex", ob) < 0) {
+		goto exit;
+	}
+	Py_DECREF(ob);
+	ob = PyLong_FromLong(rtnl_link_get_flags(link));
+	if (ob == NULL || PyDict_SetItemString(data, "flags", ob) < 0) {
+		goto exit;
+	}
+	Py_DECREF(ob);
+	ob = PyLong_FromLong(rtnl_link_get_arptype(link));
+	if (ob == NULL || PyDict_SetItemString(data, "arptype", ob) < 0) {
+		goto exit;
+	}
+	Py_DECREF(ob);
+	if (rtnl_link_get_name(link) != NULL) {
+		ob = PyBytes_FromString(rtnl_link_get_name(link));
+		if (ob == NULL || PyDict_SetItemString(data, "name", ob) < 0) {
+			goto exit;
+		}
+		Py_DECREF(ob);
+	}
+	ob = NULL;
 	PyObject *r = PyObject_CallMethod(listener->callback, "link_change", "O", arg);
 	Py_XDECREF(r);
 
   exit:
+	Py_XDECREF(data);
+	Py_XDECREF(arg);
 	if (PyErr_Occurred()) {
 		PyErr_Fetch(&listener->exc_typ, &listener->exc_val, &listener->exc_tb);
 	}
