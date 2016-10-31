@@ -5,6 +5,8 @@ import _rtnetlink
 class C:
     def link_change(self, arg):
         print("link_change", arg)
+    def addr_change(self, arg):
+        print("addr_change", arg)
 
 listener = _rtnetlink.listener(C())
 fd = listener.fileno()
