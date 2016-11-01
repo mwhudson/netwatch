@@ -171,7 +171,7 @@ static int nl_get_multicast_ids(
 static const char *nl80211_command_to_string(enum nl80211_commands cmd) {
 #define C2S(x)					\
 	case x:					\
-		return #x
+		return &#x[12]
 	switch (cmd) {
 		C2S(NL80211_CMD_UNSPEC);
 		C2S(NL80211_CMD_GET_WIPHY);
@@ -284,8 +284,140 @@ static const char *nl80211_command_to_string(enum nl80211_commands cmd) {
 #undef C2S
 }
 
-static int event_handler(struct nl_msg *msg, void *arg)
+static int observe_wlan(struct Listener* listener, int ifindex, const char* cmd, PyObject* extra)
 {
+	if (listener->exc_typ != NULL || listener->callback == Py_None) {
+		return NL_STOP;
+	}
+	PyObject *arg = PyDict_New();
+	PyObject *ob = NULL;
+
+	if (arg == NULL) {
+		goto exit;
+	}
+
+	ob = PyUnicode_FromString(cmd);
+	if (ob == NULL || PyDict_SetItemString(arg, "cmd", ob) < 0) {
+		goto exit;
+	}
+	Py_DECREF(ob);
+	ob = NULL;
+
+	ob = PyLong_FromLong(ifindex);
+	if (ob == NULL || PyDict_SetItemString(arg, "ifindex", ob) < 0) {
+		goto exit;
+	}
+	Py_DECREF(ob);
+	ob = NULL;
+
+	if (extra != NULL) {
+		PyDict_Update(arg, extra);
+	}
+
+	PyObject *r = PyObject_CallMethod(listener->callback, "wlan_event", "O", arg);
+	Py_XDECREF(r);
+  exit:
+	Py_XDECREF(arg);
+	Py_XDECREF(ob);
+	if (PyErr_Occurred()) {
+		PyErr_Fetch(&listener->exc_typ, &listener->exc_val, &listener->exc_tb);
+		return NL_STOP;
+	}
+
+	return NL_SKIP;
+}
+
+static int nl80211_trigger_scan(struct Listener *listener, int ifidx) {
+	struct nl_msg *msg;
+	struct nl_msg *ssids = NULL;
+	msg = nlmsg_alloc();
+	if (!msg) {
+		goto nla_put_failure;
+	}
+	printf("triggering scan on %d\n", ifidx);
+	genlmsg_put(msg, 0, 0, listener->nl80211_id, 0, 0, NL80211_CMD_TRIGGER_SCAN, 0);
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
+	ssids = nlmsg_alloc();
+	if (!ssids) {
+		goto nla_put_failure;
+	}
+	NLA_PUT(ssids, 1, 0, "");
+	nla_put_nested(msg, NL80211_ATTR_SCAN_SSIDS, ssids);
+
+	send_and_recv(listener->genl_sock, msg, NULL, listener);
+	msg = NULL;
+  nla_put_failure:
+	nlmsg_free(msg);
+	nlmsg_free(ssids);
+	return NL_SKIP;
+}
+
+static char *nl80211_get_ie(char *ies, size_t ies_len, char ie) {
+	char *end, *pos;
+
+	if (ies == NULL)
+		return NULL;
+
+	pos = ies;
+	end = ies + ies_len;
+
+	while (pos + 1 < end) {
+		if (pos + 2 + pos[1] > end)
+			break;
+		if (pos[0] == ie)
+			return pos;
+		pos += 2 + pos[1];
+	}
+
+	return NULL;
+}
+
+struct scan_handler_params {
+	PyObject* ssid_list;
+	int only_connected;
+};
+
+static void extract_ssid(struct nlattr *data, struct scan_handler_params *p)
+{
+	struct nlattr *bss[NL80211_BSS_MAX + 1];
+	static struct nla_policy bss_policy[NL80211_BSS_MAX + 1] = {
+		[NL80211_BSS_INFORMATION_ELEMENTS] = {},
+		[NL80211_BSS_STATUS] = {.type = NLA_U32}, [NL80211_BSS_BSSID] = {},
+	};
+	if (nla_parse_nested(bss, NL80211_BSS_MAX, data, bss_policy))
+		return;
+	char *cstatus = "no status";
+	if (bss[NL80211_BSS_STATUS]) {
+		int status = -1;
+		status = nla_get_u32(bss[NL80211_BSS_STATUS]);
+		switch (status) {
+		case NL80211_BSS_STATUS_ASSOCIATED:
+			cstatus = "Connected";
+			break;
+		case NL80211_BSS_STATUS_AUTHENTICATED:
+			cstatus = "Authenticated";
+			break;
+		case NL80211_BSS_STATUS_IBSS_JOINED:
+			cstatus = "Joined";
+			break;
+		}
+	} else if (p->only_connected) {
+		return;
+	}
+	char *ie = nla_data(bss[NL80211_BSS_INFORMATION_ELEMENTS]);
+	int ie_len = nla_len(bss[NL80211_BSS_INFORMATION_ELEMENTS]);
+	char *ssid = nl80211_get_ie(ie, ie_len, 0);
+	int ssid_len = ssid[1];
+	PyObject* v = Py_BuildValue("(y#s)", ssid + 2, ssid_len, cstatus);
+	if (v == NULL) {
+		return;
+	}
+	PyList_Append(p->ssid_list, v);
+	Py_DECREF(v);
+}
+
+static int nl80211_scan_handler(struct nl_msg *msg, void *arg) {
+	struct scan_handler_params *p = (struct scan_handler_params *)arg;
 	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
 	struct nlattr *tb[NL80211_ATTR_MAX + 1];
 	int ifidx = -1;
@@ -297,39 +429,100 @@ static int event_handler(struct nl_msg *msg, void *arg)
 		ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
 	}
 
-	printf("wlan ifidx: %d cmd: %s\n", ifidx,
-	       nl80211_command_to_string(gnlh->cmd));
-
-	if (gnlh->cmd == NL80211_CMD_NEW_INTERFACE) {
-		if (ifidx < 0) {
-			return NL_SKIP;
-		}
-		printf("nl802011 new interface ifidx: %d\n", ifidx);
-//		nl80211_trigger_scan(sock, ifidx);
+	if (ifidx < 0) {
+		return NL_SKIP;
 	}
-//	if (gnlh->cmd == NL80211_CMD_NEW_SCAN_RESULTS) {
+
+	if (tb[NL80211_ATTR_BSS]) {
+		extract_ssid(tb[NL80211_ATTR_BSS], p);
+	}
+
+	return NL_SKIP;
+}
+
+static PyObject*
+dump_scan_results(struct Listener* listener, int ifidx, int only_connected)
+{
+	struct nl_msg *msg = NULL;
+	struct scan_handler_params p;
+	p.ssid_list = PyList_New(0);
+	if (p.ssid_list == NULL) {
+		goto nla_put_failure;
+	}
+	p.only_connected = only_connected;
+
+	msg = nlmsg_alloc();
+	if (!msg) {
+		goto nla_put_failure;
+	}
+	genlmsg_put(msg, 0, 0, listener->nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_SCAN, 0);
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
+
+	send_and_recv(listener->genl_sock, msg, nl80211_scan_handler, &p);
+	msg = NULL;
+  nla_put_failure:
+	nlmsg_free(msg);
+	return p.ssid_list;
+}
+
+static int event_handler(struct nl_msg *msg, void *arg)
+{
+	struct Listener* listener = (struct Listener*)arg;
+	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+	struct nlattr *tb[NL80211_ATTR_MAX + 1];
+	int ifidx = -1;
+	PyObject* extra = NULL;
+	int r;
+
+	nla_parse(tb, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
+		  genlmsg_attrlen(gnlh, 0), NULL);
+
+	if (tb[NL80211_ATTR_IFINDEX]) {
+		ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
+	}
+
+	if (gnlh->cmd == NL80211_CMD_NEW_SCAN_RESULTS && ifidx > 0) {
+		extra = Py_BuildValue("{sO}", "ssids", dump_scan_results(listener, ifidx, 0));
+	}
+
+	if (gnlh->cmd == NL80211_CMD_ASSOCIATE && ifidx > 0) {
+		extra = Py_BuildValue("{sO}", "ssids", dump_scan_results(listener, ifidx, 1));
+	}
+
+	r = observe_wlan(listener, ifidx, nl80211_command_to_string(gnlh->cmd), extra);
+	Py_XDECREF(extra);
+	return r;
+//	
+//	printf("wlan ifidx: %d cmd: %s\n", ifidx,
+//	       nl80211_command_to_string(gnlh->cmd));
+//
+//	if (gnlh->cmd == NL80211_CMD_NEW_INTERFACE) {
 //		if (ifidx < 0) {
 //			return NL_SKIP;
 //		}
-//		printf("nl802011 new scan results on ifidx: %d\n", ifidx);
-//		struct nl_msg *msg;
-//		msg = nlmsg_alloc();
-//		if (!msg)
-//			return NL_SKIP;
-//		genlmsg_put(msg, 0, 0, nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_SCAN, 0);
-//		NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
-//
-//		send_and_recv(sock, msg, nl80211_scan_handler, NULL);
-//		msg = NULL;
-//	  nla_put_failure:
-//		nlmsg_free(msg);
+//		printf("nl802011 new interface ifidx: %d\n", ifidx);
+////		nl80211_trigger_scan(sock, ifidx);
 //	}
-//
-//	if (tb[NL80211_ATTR_BSS]) {
-//		maybe_print_ssid(ifidx, tb[NL80211_ATTR_BSS]);
-//	}
-//
-	return NL_SKIP;
+////	if (gnlh->cmd == NL80211_CMD_NEW_SCAN_RESULTS) {
+////		if (ifidx < 0) {
+////			return NL_SKIP;
+////		}
+////		printf("nl802011 new scan results on ifidx: %d\n", ifidx);
+////		struct nl_msg *msg;
+////		msg = nlmsg_alloc();
+////		if (!msg)
+////			return NL_SKIP;
+////		genlmsg_put(msg, 0, 0, nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_SCAN, 0);
+////		NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
+////
+////		send_and_recv(sock, msg, nl80211_scan_handler, NULL);
+////		msg = NULL;
+////	  nla_put_failure:
+////		nlmsg_free(msg);
+////	}
+////
+////
+//	return NL_SKIP;
 }
 
 
@@ -439,6 +632,17 @@ listener_start(PyObject *self, PyObject* args)
 		return NULL;
 	}
 
+	// Request a dump of all wlan interfaces to get us started.
+	struct nl_msg *msg;
+	msg = nlmsg_alloc();
+	if (!msg)
+		return NULL;
+	genlmsg_put(msg, 0, 0, listener->nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_INTERFACE,
+		    0);
+
+	send_and_recv(listener->genl_sock, msg, event_handler, listener);
+	msg = NULL;
+
 	return maybe_restore(listener);
 }
 
@@ -459,10 +663,27 @@ listener_data_ready(PyObject *self, PyObject* args)
 	return maybe_restore(listener);
 }
 
+static PyObject*
+listener_trigger_scan(PyObject *self, PyObject* args, PyObject* kw)
+{
+	struct Listener* listener = (struct Listener*)self;
+	long ifindex;
+
+	char *kwlist[] = {"ifindex", 0};
+
+	if (!PyArg_ParseTupleAndKeywords(args, kw, "i:listener", kwlist, &ifindex))
+		return NULL;
+
+	nl80211_trigger_scan(listener, ifindex);
+
+	Py_RETURN_NONE;
+}
+
 static PyMethodDef ListenerMethods[] = {
 	{"start", listener_start, METH_NOARGS, "XXX."},
 	{"fileno", listener_fileno, METH_NOARGS, "XXX."},
-	{"data_ready", listener_data_ready, METH_NOARGS, "XXX."},
+	{"data_ready", listener_data_ready, METH_VARARGS, "XXX."},
+	{"trigger_scan", (PyCFunction)listener_trigger_scan, METH_VARARGS|METH_KEYWORDS, "XXX."},
 	{},
 };
 

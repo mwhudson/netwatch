@@ -9,19 +9,19 @@
 #define NL_CB_me NL_CB_DEFAULT
 
 static char *act2str(int act) {
-#define C2S(x)                                                                 \
-  case x:                                                                      \
-    return &#x[7];
-  switch (act) {
-    C2S(NL_ACT_UNSPEC)
-    C2S(NL_ACT_NEW)
-    C2S(NL_ACT_DEL)
-    C2S(NL_ACT_GET)
-    C2S(NL_ACT_SET)
-    C2S(NL_ACT_CHANGE)
-  default:
-	  return "???";
-  }
+#define C2S(x)					\
+	case x:					\
+		return &#x[7]
+	switch (act) {
+		C2S(NL_ACT_UNSPEC);
+		C2S(NL_ACT_NEW);
+		C2S(NL_ACT_DEL);
+		C2S(NL_ACT_GET);
+		C2S(NL_ACT_SET);
+		C2S(NL_ACT_CHANGE);
+	default:
+		return "???";
+	}
 #undef C2S
 }
 

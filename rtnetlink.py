@@ -8,6 +8,18 @@ class C:
         print("link_change", arg)
     def addr_change(self, arg):
         print("addr_change", arg)
+    def wlan_event(self, arg):
+        if arg['cmd'] == 'NEW_SCAN_RESULTS' and 'ssids' in arg:
+            ssids = set()
+            for (ssid, status) in arg['ssids']:
+                ssids.add(ssid)
+                if status != "no status":
+                    print(status, ssid)
+            print("ssids:", sorted(ssids))
+            return
+        if arg['cmd'] == 'NEW_INTERFACE' and arg['ifindex'] > 0:
+            wlan_listener.trigger_scan(arg['ifindex'])
+        print("wlan_event", arg)
 
 c = C()
 

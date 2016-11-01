@@ -431,6 +431,7 @@ static void maybe_print_ssid(int ifindex, struct nlattr *data) {
 }
 
 static int nl80211_scan_handler(struct nl_msg *msg, void *arg) {
+	printf("nl80211_scan_handler\n");
   struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
   struct nlattr *tb[NL80211_ATTR_MAX + 1];
   int ifidx = -1;
