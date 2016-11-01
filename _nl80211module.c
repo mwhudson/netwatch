@@ -410,9 +410,12 @@ static void extract_ssid(struct nlattr *data, struct scan_handler_params *p)
 	int ssid_len = ssid[1];
 	PyObject* v = Py_BuildValue("(y#s)", ssid + 2, ssid_len, cstatus);
 	if (v == NULL) {
+		Py_CLEAR(p->ssid_list);
 		return;
 	}
-	PyList_Append(p->ssid_list, v);
+	if (PyList_Append(p->ssid_list, v) < 0) {
+		Py_CLEAR(p->ssid_list);
+	}
 	Py_DECREF(v);
 }
 
@@ -435,6 +438,10 @@ static int nl80211_scan_handler(struct nl_msg *msg, void *arg) {
 
 	if (tb[NL80211_ATTR_BSS]) {
 		extract_ssid(tb[NL80211_ATTR_BSS], p);
+	}
+
+	if (p->ssid_list == NULL) {
+		return NL_STOP;
 	}
 
 	return NL_SKIP;
@@ -482,47 +489,24 @@ static int event_handler(struct nl_msg *msg, void *arg)
 	}
 
 	if (gnlh->cmd == NL80211_CMD_NEW_SCAN_RESULTS && ifidx > 0) {
-		extra = Py_BuildValue("{sO}", "ssids", dump_scan_results(listener, ifidx, 0));
+		PyObject* ssids = dump_scan_results(listener, ifidx, 0);
+		if (ssids == NULL) {
+			return NL_STOP;
+		}
+		extra = Py_BuildValue("{sO}", "ssids", ssids);
 	}
 
 	if (gnlh->cmd == NL80211_CMD_ASSOCIATE && ifidx > 0) {
-		extra = Py_BuildValue("{sO}", "ssids", dump_scan_results(listener, ifidx, 1));
+		PyObject* ssids = dump_scan_results(listener, ifidx, 1);
+		if (ssids == NULL) {
+			return NL_STOP;
+		}
+		extra = Py_BuildValue("{sO}", "ssids", ssids);
 	}
 
 	r = observe_wlan(listener, ifidx, nl80211_command_to_string(gnlh->cmd), extra);
 	Py_XDECREF(extra);
 	return r;
-//	
-//	printf("wlan ifidx: %d cmd: %s\n", ifidx,
-//	       nl80211_command_to_string(gnlh->cmd));
-//
-//	if (gnlh->cmd == NL80211_CMD_NEW_INTERFACE) {
-//		if (ifidx < 0) {
-//			return NL_SKIP;
-//		}
-//		printf("nl802011 new interface ifidx: %d\n", ifidx);
-////		nl80211_trigger_scan(sock, ifidx);
-//	}
-////	if (gnlh->cmd == NL80211_CMD_NEW_SCAN_RESULTS) {
-////		if (ifidx < 0) {
-////			return NL_SKIP;
-////		}
-////		printf("nl802011 new scan results on ifidx: %d\n", ifidx);
-////		struct nl_msg *msg;
-////		msg = nlmsg_alloc();
-////		if (!msg)
-////			return NL_SKIP;
-////		genlmsg_put(msg, 0, 0, nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_SCAN, 0);
-////		NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
-////
-////		send_and_recv(sock, msg, nl80211_scan_handler, NULL);
-////		msg = NULL;
-////	  nla_put_failure:
-////		nlmsg_free(msg);
-////	}
-////
-////
-//	return NL_SKIP;
 }
 
 
@@ -641,7 +625,6 @@ listener_start(PyObject *self, PyObject* args)
 		    0);
 
 	send_and_recv(listener->genl_sock, msg, event_handler, listener);
-	msg = NULL;
 
 	return maybe_restore(listener);
 }
