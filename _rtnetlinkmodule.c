@@ -311,48 +311,9 @@ static PyTypeObject ListenerType = {
 	.tp_methods = ListenerMethods,
 };
 
-//static char buf[100];
-
-//static void dump_addr_info(int act, struct rtnl_addr *addr) {
-//  struct nl_addr *local = rtnl_addr_get_local(addr);
-//  printf("addr act: %-6s ifindex: %2d local: %s\n", act2str(act),
-//         rtnl_addr_get_ifindex(addr), nl_addr2str(local, buf, sizeof(buf)));
-//}
-//
-//static void cb_addr(struct nl_cache *cache, struct nl_object *ob, int act,
-//                    void *data) {
-//  dump_addr_info(act, (struct rtnl_addr *)ob);
-//}
-//
-//static void e_addr(struct nl_object *ob, void *data) {
-//  dump_addr_info(NL_ACT_NEW, (struct rtnl_addr *)ob);
-//}
-
-//struct nl_cache *add_addr_cache(struct nl_sock *sock,
-//                                struct nl_cache_mngr *mngr) {
-//  struct nl_cache *addr_cache;
-//  int r;
-//
-//  r = rtnl_addr_alloc_cache(sock, &addr_cache);
-//  if (r < 0) {
-//    fprintf(stderr, "rtnl_addr_alloc_cache_add failed %d\n", r);
-//    exit(1);
-//  }
-//
-//  r = nl_cache_mngr_add_cache(mngr, addr_cache, cb_addr, NULL);
-//  if (r < 0) {
-//    fprintf(stderr, "nl_cache_mngr_add_cache failed %d\n", r);
-//    exit(1);
-//  }
-//
-//  return addr_cache;
-//}
-
 static struct PyModuleDef rtnetlink_module = {
    PyModuleDef_HEAD_INIT,
    "_rtnetlink",
-   NULL,
-   -1,
 };
 
 PyMODINIT_FUNC

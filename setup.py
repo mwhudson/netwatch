@@ -58,5 +58,9 @@ setup(
             "_rtnetlink",
             ['_rtnetlinkmodule.c'],
             **pkgconfig("libnl-route-3.0")),
+        Extension(
+            "_nl80211",
+            ['_nl80211module.c'],
+            **pkgconfig("libnl-genl-3.0")),
         ],
     )
