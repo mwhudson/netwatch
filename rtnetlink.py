@@ -16,7 +16,7 @@ class BasicObserver:
             d['flags'] = "%08x"%(d['flags'],)
         name = d['name'].decode('latin-1')
         self.links[d['ifindex']] = name
-        #print("link_change", arg, typ)
+        print("link_change", arg)
     def addr_change(self, arg):
         permanent = bool(arg['data'].get('flags', 0) & 0x80)
         print("addr_change", arg, "permanent", permanent)
@@ -33,25 +33,24 @@ class BasicObserver:
             wlan_listener.trigger_scan(arg['ifindex'])
         print("wlan_event", arg)
 
-c = BasicObserver()
+if __name__ == '__main__':
+    c = BasicObserver()
 
-rtlistener = _rtnetlink.listener(c)
-rtlistener.start()
+    rtlistener = _rtnetlink.listener(c)
+    rtlistener.start()
 
-print(c.links)
+    wlan_listener = _nl80211.listener(c)
+    wlan_listener.start()
 
-wlan_listener = _nl80211.listener(c)
-wlan_listener.start()
+    fdmap = {
+        rtlistener.fileno(): rtlistener.data_ready,
+        wlan_listener.fileno(): wlan_listener.data_ready,
+        }
 
-fdmap = {
-    rtlistener.fileno(): rtlistener.data_ready,
-    wlan_listener.fileno(): wlan_listener.data_ready,
-    }
-
-poll_ob = select.epoll()
-for fd in fdmap:
-    poll_ob.register(fd, select.EPOLLIN)
-while True:
-    events = poll_ob.poll()
-    for (fd, e) in events:
-        fdmap[fd]()
+    poll_ob = select.epoll()
+    for fd in fdmap:
+        poll_ob.register(fd, select.EPOLLIN)
+    while True:
+        events = poll_ob.poll()
+        for (fd, e) in events:
+            fdmap[fd]()

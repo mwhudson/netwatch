@@ -139,6 +139,11 @@ static void observe_addr_change(
 		goto exit;
 	}
 	Py_DECREF(ob);
+	ob = PyLong_FromLong(rtnl_addr_get_family(addr));
+	if (ob == NULL || PyDict_SetItemString(data, "family", ob) < 0) {
+		goto exit;
+	}
+	Py_DECREF(ob);
 	struct nl_addr *local = rtnl_addr_get_local(addr);
 	if (local != NULL) {
 		char buf[100];
