@@ -71,6 +71,11 @@ static void observe_link_change(
 		goto exit;
 	}
 	Py_DECREF(ob);
+	ob = PyLong_FromLong(rtnl_link_get_family(link));
+	if (ob == NULL || PyDict_SetItemString(data, "family", ob) < 0) {
+		goto exit;
+	}
+	Py_DECREF(ob);
 	if (rtnl_link_get_name(link) != NULL) {
 		ob = PyBytes_FromString(rtnl_link_get_name(link));
 		if (ob == NULL || PyDict_SetItemString(data, "name", ob) < 0) {

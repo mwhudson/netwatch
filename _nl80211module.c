@@ -328,7 +328,7 @@ static int observe_wlan_event(struct Listener* listener, int ifindex, const char
 }
 
 static int nl80211_trigger_scan(struct Listener *listener, int ifidx) {
-	struct nl_msg *msg;
+	struct nl_msg *msg = NULL;
 	struct nl_msg *ssids = NULL;
 	int r;
 
@@ -463,12 +463,24 @@ static PyObject*
 dump_scan_results(struct Listener* listener, int ifidx, int only_connected)
 {
 	struct nl_msg *msg = NULL;
-	struct scan_handler_params p;
+	struct scan_handler_params p = { .ssid_list = NULL };
+	p.only_connected = only_connected;
+	struct nl_sock *genl_sock = nl_socket_alloc();
+	int r;
+
+	if (genl_sock == NULL) {
+		PyErr_SetString(PyExc_MemoryError, "nl_socket_alloc failed");
+		goto nla_put_failure;
+	}
+	r = genl_connect(genl_sock);
+	if (r < 0) {
+		PyErr_Format(PyExc_MemoryError, "genl_connect failed %d", r);
+		goto nla_put_failure;
+	}
 	p.ssid_list = PyList_New(0);
 	if (p.ssid_list == NULL) {
 		goto nla_put_failure;
 	}
-	p.only_connected = only_connected;
 
 	msg = nlmsg_alloc();
 	if (!msg) {
@@ -477,10 +489,11 @@ dump_scan_results(struct Listener* listener, int ifidx, int only_connected)
 	genlmsg_put(msg, 0, 0, listener->nl80211_id, 0, NLM_F_DUMP, NL80211_CMD_GET_SCAN, 0);
 	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
 
-	send_and_recv(listener->genl_sock, msg, nl80211_scan_handler, &p);
+	send_and_recv(genl_sock, msg, nl80211_scan_handler, &p);
 	msg = NULL;
   nla_put_failure:
 	nlmsg_free(msg);
+	nl_socket_free(genl_sock);
 	return p.ssid_list;
 }
 
@@ -500,20 +513,22 @@ static int event_handler(struct nl_msg *msg, void *arg)
 		ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
 	}
 
-	if (gnlh->cmd == NL80211_CMD_NEW_SCAN_RESULTS && ifidx > 0) {
-		PyObject* ssids = dump_scan_results(listener, ifidx, 0);
-		if (ssids == NULL) {
-			return NL_STOP;
+	if (ifidx > 0) {
+		if (gnlh->cmd == NL80211_CMD_NEW_SCAN_RESULTS) {
+			PyObject* ssids = dump_scan_results(listener, ifidx, 0);
+			if (ssids == NULL) {
+				return NL_STOP;
+			}
+			extra = Py_BuildValue("{sO}", "ssids", ssids);
 		}
-		extra = Py_BuildValue("{sO}", "ssids", ssids);
-	}
 
-	if (gnlh->cmd == NL80211_CMD_ASSOCIATE && ifidx > 0) {
-		PyObject* ssids = dump_scan_results(listener, ifidx, 1);
-		if (ssids == NULL) {
-			return NL_STOP;
+		if (gnlh->cmd == NL80211_CMD_ASSOCIATE || gnlh->cmd == NL80211_CMD_NEW_INTERFACE) {
+			PyObject* ssids = dump_scan_results(listener, ifidx, 1);
+			if (ssids == NULL) {
+				return NL_STOP;
+			}
+			extra = Py_BuildValue("{sO}", "ssids", ssids);
 		}
-		extra = Py_BuildValue("{sO}", "ssids", ssids);
 	}
 
 	r = observe_wlan_event(listener, ifidx, nl80211_command_to_string(gnlh->cmd), extra);

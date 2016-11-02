@@ -3,9 +3,20 @@ import select
 import _nl80211
 import _rtnetlink
 
-class C:
+class BasicObserver:
+
+    def __init__(self):
+        self.links = {}
+
     def link_change(self, arg):
-        print("link_change", arg)
+        d = arg['data']
+        if arg['action'] == 'DEL':
+            del self.links[d['ifindex']]
+        if 'flags' in d:
+            d['flags'] = "%08x"%(d['flags'],)
+        name = d['name'].decode('latin-1')
+        self.links[d['ifindex']] = name
+        #print("link_change", arg, typ)
     def addr_change(self, arg):
         permanent = bool(arg['data'].get('flags', 0) & 0x80)
         print("addr_change", arg, "permanent", permanent)
@@ -22,10 +33,12 @@ class C:
             wlan_listener.trigger_scan(arg['ifindex'])
         print("wlan_event", arg)
 
-c = C()
+c = BasicObserver()
 
 rtlistener = _rtnetlink.listener(c)
 rtlistener.start()
+
+print(c.links)
 
 wlan_listener = _nl80211.listener(c)
 wlan_listener.start()
