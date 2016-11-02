@@ -7,7 +7,8 @@ class C:
     def link_change(self, arg):
         print("link_change", arg)
     def addr_change(self, arg):
-        print("addr_change", arg)
+        permanent = bool(arg['data'].get('flags', 0) & 0x80)
+        print("addr_change", arg, "permanent", permanent)
     def wlan_event(self, arg):
         if arg['cmd'] == 'NEW_SCAN_RESULTS' and 'ssids' in arg:
             ssids = set()
