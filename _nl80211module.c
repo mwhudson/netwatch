@@ -12,7 +12,7 @@
 
 struct Listener {
 	PyObject_HEAD
-	PyObject *callback;
+	PyObject *observer;
 	struct nl_sock* event_sock;
 	struct nl_sock* genl_sock;
 	PyObject *exc_typ, *exc_val, *exc_tb;
@@ -25,7 +25,7 @@ static void
 listener_dealloc(PyObject *self) {
 	struct Listener* v = (struct Listener*)self;
 	PyObject_GC_UnTrack(v);
-	Py_CLEAR(v->callback);
+	Py_CLEAR(v->observer);
 	Py_CLEAR(v->exc_typ);
 	Py_CLEAR(v->exc_val);
 	Py_CLEAR(v->exc_tb);
@@ -37,7 +37,7 @@ static int
 listener_traverse(PyObject *self, visitproc visit, void *arg)
 {
 	struct Listener* v = (struct Listener*)self;
-	Py_VISIT(v->callback);
+	Py_VISIT(v->observer);
 	Py_VISIT(v->exc_typ);
 	Py_VISIT(v->exc_val);
 	Py_VISIT(v->exc_tb);
@@ -62,7 +62,7 @@ static int error_handler(struct sockaddr_nl *nla, struct nlmsgerr *err,
                          void *arg) {
 	int *ret = arg;
 	*ret = err->error;
-	return NL_SKIP;
+	return NL_STOP;
 }
 
 static int no_seq_check(struct nl_msg *msg, void *arg) { return NL_OK; }
@@ -136,8 +136,8 @@ static int send_and_recv(
 
 	while (err > 0) {
 		int res = nl_recvmsgs(genl_sock, cb);
-		if (res < 0) {
-			fprintf(stderr, "nl_recvmsgs failed");
+		if (res < 0 && err > 0) {
+			err = res;
 		}
 	}
   out:
@@ -284,9 +284,9 @@ static const char *nl80211_command_to_string(enum nl80211_commands cmd) {
 #undef C2S
 }
 
-static int observe_wlan(struct Listener* listener, int ifindex, const char* cmd, PyObject* extra)
+static int observe_wlan_event(struct Listener* listener, int ifindex, const char* cmd, PyObject* extra)
 {
-	if (listener->exc_typ != NULL || listener->callback == Py_None) {
+	if (listener->exc_typ != NULL || listener->observer == Py_None) {
 		return NL_STOP;
 	}
 	PyObject *arg = PyDict_New();
@@ -314,7 +314,7 @@ static int observe_wlan(struct Listener* listener, int ifindex, const char* cmd,
 		PyDict_Update(arg, extra);
 	}
 
-	PyObject *r = PyObject_CallMethod(listener->callback, "wlan_event", "O", arg);
+	PyObject *r = PyObject_CallMethod(listener->observer, "wlan_event", "O", arg);
 	Py_XDECREF(r);
   exit:
 	Py_XDECREF(arg);
@@ -330,11 +330,22 @@ static int observe_wlan(struct Listener* listener, int ifindex, const char* cmd,
 static int nl80211_trigger_scan(struct Listener *listener, int ifidx) {
 	struct nl_msg *msg;
 	struct nl_msg *ssids = NULL;
+	int r;
+
+	struct nl_sock *genl_sock = nl_socket_alloc();
+	if (genl_sock == NULL) {
+		r = -1;
+		goto nla_put_failure;
+	}
+	r = genl_connect(genl_sock);
+	if (r < 0) {
+		goto nla_put_failure;
+	}
+
 	msg = nlmsg_alloc();
 	if (!msg) {
 		goto nla_put_failure;
 	}
-	printf("triggering scan on %d\n", ifidx);
 	genlmsg_put(msg, 0, 0, listener->nl80211_id, 0, 0, NL80211_CMD_TRIGGER_SCAN, 0);
 	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, ifidx);
 	ssids = nlmsg_alloc();
@@ -344,12 +355,13 @@ static int nl80211_trigger_scan(struct Listener *listener, int ifidx) {
 	NLA_PUT(ssids, 1, 0, "");
 	nla_put_nested(msg, NL80211_ATTR_SCAN_SSIDS, ssids);
 
-	send_and_recv(listener->genl_sock, msg, NULL, listener);
+	r = send_and_recv(genl_sock, msg, NULL, NULL);
 	msg = NULL;
   nla_put_failure:
 	nlmsg_free(msg);
 	nlmsg_free(ssids);
-	return NL_SKIP;
+	nl_socket_free(genl_sock);
+	return r;
 }
 
 static char *nl80211_get_ie(char *ies, size_t ies_len, char ie) {
@@ -504,7 +516,7 @@ static int event_handler(struct nl_msg *msg, void *arg)
 		extra = Py_BuildValue("{sO}", "ssids", ssids);
 	}
 
-	r = observe_wlan(listener, ifidx, nl80211_command_to_string(gnlh->cmd), extra);
+	r = observe_wlan_event(listener, ifidx, nl80211_command_to_string(gnlh->cmd), extra);
 	Py_XDECREF(extra);
 	return r;
 }
@@ -544,7 +556,7 @@ listener_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 	listener->genl_sock = genl_sock;
 
 	Py_INCREF(Py_None);
-	listener->callback = Py_None;
+	listener->observer = Py_None;
 
 	return (PyObject*)listener;
 }
@@ -552,18 +564,18 @@ listener_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 static int
 listener_init(PyObject *self, PyObject *args, PyObject *kw)
 {
-	PyObject* cb;
+	PyObject* observer;
 
-	char *kwlist[] = {"callback", 0};
+	char *kwlist[] = {"observer", 0};
 
-	if (!PyArg_ParseTupleAndKeywords(args, kw, "O:listener", kwlist, &cb))
+	if (!PyArg_ParseTupleAndKeywords(args, kw, "O:listener", kwlist, &observer))
 		return -1;
 
 	struct Listener* listener = (struct Listener*)self;
 
-	Py_CLEAR(listener->callback);
-	Py_INCREF(cb);
-	listener->callback = cb;
+	Py_CLEAR(listener->observer);
+	Py_INCREF(observer);
+	listener->observer = observer;
 
 	return 0;
 }
@@ -657,7 +669,13 @@ listener_trigger_scan(PyObject *self, PyObject* args, PyObject* kw)
 	if (!PyArg_ParseTupleAndKeywords(args, kw, "i:listener", kwlist, &ifindex))
 		return NULL;
 
-	nl80211_trigger_scan(listener, ifindex);
+	int r = 0;
+	r = nl80211_trigger_scan(listener, ifindex);
+
+	if (r < 0) {
+		PyErr_Format(PyExc_RuntimeError, "triggering scan failed %d\n", r);
+		return NULL;
+	}
 
 	Py_RETURN_NONE;
 }

@@ -28,16 +28,16 @@ static char *act2str(int act) {
 struct Listener {
 	PyObject_HEAD
 	struct nl_cache_mngr *mngr;
-	PyObject *callback;
+	PyObject *observer;
 	PyObject *exc_typ, *exc_val, *exc_tb;
 };
 
-static void call_link_callback(
+static void observe_link_change(
 	int act,
 	struct rtnl_link *link,
 	struct Listener* listener)
 {
-	if (listener->exc_typ != NULL || listener->callback == Py_None) {
+	if (listener->exc_typ != NULL || listener->observer == Py_None) {
 		return;
 	}
 	PyObject *arg = PyDict_New();
@@ -79,7 +79,7 @@ static void call_link_callback(
 		Py_DECREF(ob);
 	}
 	ob = NULL;
-	PyObject *r = PyObject_CallMethod(listener->callback, "link_change", "O", arg);
+	PyObject *r = PyObject_CallMethod(listener->observer, "link_change", "O", arg);
 	Py_XDECREF(r);
 
   exit:
@@ -93,19 +93,19 @@ static void call_link_callback(
 
 static void _cb_link(struct nl_cache *cache, struct nl_object *ob, int act,
                     void *data) {
-	call_link_callback(act, (struct rtnl_link *)ob, (struct Listener*)data);
+	observe_link_change(act, (struct rtnl_link *)ob, (struct Listener*)data);
 }
 
 static void _e_link(struct nl_object *ob, void *data) {
-	call_link_callback(NL_ACT_NEW, (struct rtnl_link *)ob, (struct Listener*)data);
+	observe_link_change(NL_ACT_NEW, (struct rtnl_link *)ob, (struct Listener*)data);
 }
 
-static void call_addr_callback(
+static void observe_addr_change(
 	int act,
 	struct rtnl_addr *addr,
 	struct Listener* listener)
 {
-	if (listener->exc_typ != NULL || listener->callback == Py_None) {
+	if (listener->exc_typ != NULL || listener->observer == Py_None) {
 		return;
 	}
 	PyObject *arg = PyDict_New();
@@ -139,7 +139,7 @@ static void call_addr_callback(
 		Py_DECREF(ob);
 	}
 	ob = NULL;
-	PyObject *r = PyObject_CallMethod(listener->callback, "addr_change", "O", arg);
+	PyObject *r = PyObject_CallMethod(listener->observer, "addr_change", "O", arg);
 	Py_XDECREF(r);
 
   exit:
@@ -153,18 +153,18 @@ static void call_addr_callback(
 
 static void _cb_addr(struct nl_cache *cache, struct nl_object *ob, int act,
                     void *data) {
-	call_addr_callback(act, (struct rtnl_addr *)ob, (struct Listener*)data);
+	observe_addr_change(act, (struct rtnl_addr *)ob, (struct Listener*)data);
 }
 
 static void _e_addr(struct nl_object *ob, void *data) {
-	call_addr_callback(NL_ACT_NEW, (struct rtnl_addr *)ob, (struct Listener*)data);
+	observe_addr_change(NL_ACT_NEW, (struct rtnl_addr *)ob, (struct Listener*)data);
 }
 
 static void
 listener_dealloc(PyObject *self) {
 	struct Listener* v = (struct Listener*)self;
 	PyObject_GC_UnTrack(v);
-	Py_CLEAR(v->callback);
+	Py_CLEAR(v->observer);
 	nl_cache_mngr_free(v->mngr);
 	Py_CLEAR(v->exc_typ);
 	Py_CLEAR(v->exc_val);
@@ -176,7 +176,7 @@ static int
 listener_traverse(PyObject *self, visitproc visit, void *arg)
 {
 	struct Listener* v = (struct Listener*)self;
-	Py_VISIT(v->callback);
+	Py_VISIT(v->observer);
 	Py_VISIT(v->exc_typ);
 	Py_VISIT(v->exc_val);
 	Py_VISIT(v->exc_tb);
@@ -202,7 +202,7 @@ listener_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 	listener->mngr = mngr;
 
 	Py_INCREF(Py_None);
-	listener->callback = Py_None;
+	listener->observer = Py_None;
 
 	return (PyObject*)listener;
 }
@@ -210,18 +210,18 @@ listener_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 static int
 listener_init(PyObject *self, PyObject *args, PyObject *kw)
 {
-	PyObject* cb;
+	PyObject* observer;
 
-	char *kwlist[] = {"callback", 0};
+	char *kwlist[] = {"observer", 0};
 
-	if (!PyArg_ParseTupleAndKeywords(args, kw, "O:listener", kwlist, &cb))
+	if (!PyArg_ParseTupleAndKeywords(args, kw, "O:listener", kwlist, &observer))
 		return -1;
 
 	struct Listener* listener = (struct Listener*)self;
 
-	Py_CLEAR(listener->callback);
-	Py_INCREF(cb);
-	listener->callback = cb;
+	Py_CLEAR(listener->observer);
+	Py_INCREF(observer);
+	listener->observer = observer;
 
 	return 0;
 }
