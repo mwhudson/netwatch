@@ -109,7 +109,7 @@ class NetworkInfo:
         self.ip = {}
         self.ip_sources = {}
         self.bond = self._get_bonding()
-        self.bond = self._get_bridging()
+        self.bridge = self._get_bridging()
 
         # This is the logic ip from iproute2 uses to determine whether
         # to show NO-CARRIER or not. It only really makes sense for a
@@ -303,18 +303,18 @@ class UdevObserver:
             self.wlan_listener.fileno(): self.wlan_listener.data_ready,
             }
 
-    def link_change(self, arg):
-        d = arg['data']
-        ifindex = d['ifindex']
-        if arg['action'] == 'DEL':
-            del self.links[d['ifindex']]
+    def link_change(self, action, data):
+        ifindex = data['ifindex']
+        if action == 'DEL':
+            del self.links[data['ifindex']]
             return
-        if arg['action'] == 'CHANGE':
-            # Not sure what to do here.
+        if action == 'CHANGE':
+            # Not sure what to do here, don't want to override self.links[d['ifindex']] as that
+            # will lose addresses etc.
             return
-        for k, v in d.items():
-            if isinstance(v, bytes):
-                d[k] = v.decode('utf-8', 'replace')
+        for k, v in data.items():
+            if isinstance(data, bytes):
+                data[k] = data.decode('utf-8', 'replace')
         udev_devices = list(self.context.list_devices(IFINDEX=str(ifindex)))
         if len(udev_devices) == 0:
             # Has disappeared already?
@@ -322,24 +322,22 @@ class UdevObserver:
         udev_device = udev_devices[0]
         udev_data = dict(udev_device)
         udev_data['attrs'] = udev_get_attributes(udev_device)
-        self.links[d['ifindex']] = NetworkInfo(d, udev_data)
+        self.links[data['ifindex']] = NetworkInfo(data, udev_data)
 
-    def addr_change(self, arg):
-        d = arg['data']
-        d = arg['data']
-        link = self.links.get(d['ifindex'])
+    def addr_change(self, action, data):
+        link = self.links.get(data['ifindex'])
         if link is None:
             return
-        ip = d['local'].decode('latin-1')
-        family_ips = link.ip.setdefault(d['family'], [])
-        if arg['action'] == 'DEL':
+        ip = data['local'].decode('latin-1')
+        family_ips = link.ip.setdefault(data['family'], [])
+        if action == 'DEL':
             if ip in family_ips:
                 family_ips.remove(ip)
             link.ip_sources.pop(ip, None)
             return
-        elif arg['action'] == 'NEW' and ip not in family_ips:
+        elif action == 'NEW' and ip not in family_ips:
             family_ips.append(ip)
-        if d.get('flags', 0) & IFA_F_PERMANENT:
+        if data.get('flags', 0) & IFA_F_PERMANENT:
             source = 'static'
         else:
             source = 'dhcp'

@@ -8,18 +8,17 @@ class BasicObserver:
     def __init__(self):
         self.links = {}
 
-    def link_change(self, arg):
-        d = arg['data']
-        if arg['action'] == 'DEL':
-            del self.links[d['ifindex']]
-        if 'flags' in d:
-            d['flags'] = "%08x"%(d['flags'],)
-        name = d['name'].decode('latin-1')
-        self.links[d['ifindex']] = name
-        print("link_change", arg)
-    def addr_change(self, arg):
-        permanent = bool(arg['data'].get('flags', 0) & 0x80)
-        print("addr_change", arg, "permanent", permanent)
+    def link_change(self, action, data):
+        if action == 'DEL':
+            del self.links[data['ifindex']]
+        if 'flags' in data:
+            data['flags'] = "%08x"%(data['flags'],)
+        name = data['name'].decode('latin-1')
+        self.links[data['ifindex']] = name
+        print("link_change", action, data)
+    def addr_change(self, action, data):
+        permanent = bool(data.get('flags', 0) & 0x80)
+        print("addr_change", action, data, "permanent", permanent)
     def wlan_event(self, arg):
         if arg['cmd'] == 'NEW_SCAN_RESULTS' and 'ssids' in arg:
             ssids = set()

@@ -40,57 +40,29 @@ static void observe_link_change(
 	if (listener->exc_typ != NULL || listener->observer == Py_None) {
 		return;
 	}
-	PyObject *arg = PyDict_New();
-	PyObject *ob = NULL;
-	PyObject *data = NULL;
-	if (arg == NULL) {
+	PyObject *data;
+	data = Py_BuildValue(
+		"{si sI sI si}",
+		"ifindex", rtnl_link_get_ifindex(link),
+		"flags", rtnl_link_get_flags(link),
+		"arptype", rtnl_link_get_arptype(link),
+		"family", rtnl_link_get_family(link));
+	if (data == NULL) {
 		goto exit;
 	}
-	ob = PyUnicode_FromString(act2str(act));
-	if (ob == NULL || PyDict_SetItemString(arg, "action", ob) < 0) {
-		goto exit;
-	}
-	Py_DECREF(ob);
-	ob = PyDict_New();
-	if (ob == NULL || PyDict_SetItemString(arg, "data", ob) < 0) {
-		goto exit;
-	}
-	data = ob;
-	ob = PyLong_FromLong(rtnl_link_get_ifindex(link));
-	if (ob == NULL || PyDict_SetItemString(data, "ifindex", ob) < 0) {
-		goto exit;
-	}
-	Py_DECREF(ob);
-	ob = PyLong_FromLong(rtnl_link_get_flags(link));
-	if (ob == NULL || PyDict_SetItemString(data, "flags", ob) < 0) {
-		goto exit;
-	}
-	Py_DECREF(ob);
-	ob = PyLong_FromLong(rtnl_link_get_arptype(link));
-	if (ob == NULL || PyDict_SetItemString(data, "arptype", ob) < 0) {
-		goto exit;
-	}
-	Py_DECREF(ob);
-	ob = PyLong_FromLong(rtnl_link_get_family(link));
-	if (ob == NULL || PyDict_SetItemString(data, "family", ob) < 0) {
-		goto exit;
-	}
-	Py_DECREF(ob);
 	if (rtnl_link_get_name(link) != NULL) {
-		ob = PyBytes_FromString(rtnl_link_get_name(link));
+		PyObject *ob = PyBytes_FromString(rtnl_link_get_name(link));
 		if (ob == NULL || PyDict_SetItemString(data, "name", ob) < 0) {
+			Py_XDECREF(ob);
 			goto exit;
 		}
 		Py_DECREF(ob);
 	}
-	ob = NULL;
-	PyObject *r = PyObject_CallMethod(listener->observer, "link_change", "O", arg);
+	PyObject *r = PyObject_CallMethod(listener->observer, "link_change", "sO", act2str(act), data);
 	Py_XDECREF(r);
 
   exit:
-	Py_XDECREF(ob);
 	Py_XDECREF(data);
-	Py_XDECREF(arg);
 	if (PyErr_Occurred()) {
 		PyErr_Fetch(&listener->exc_typ, &listener->exc_val, &listener->exc_tb);
 	}
@@ -113,54 +85,30 @@ static void observe_addr_change(
 	if (listener->exc_typ != NULL || listener->observer == Py_None) {
 		return;
 	}
-	PyObject *arg = PyDict_New();
-	PyObject *ob = NULL;
-	PyObject *data = NULL;
-	if (arg == NULL) {
+	PyObject *data;
+	data = Py_BuildValue(
+		"{si sI si}",
+		"ifindex", rtnl_addr_get_ifindex(addr),
+		"flags", rtnl_addr_get_flags(addr),
+		"family", rtnl_addr_get_family(addr));
+	if (data == NULL) {
 		goto exit;
 	}
-	ob = PyUnicode_FromString(act2str(act));
-	if (ob == NULL || PyDict_SetItemString(arg, "action", ob) < 0) {
-		goto exit;
-	}
-	Py_DECREF(ob);
-	ob = PyDict_New();
-	if (ob == NULL || PyDict_SetItemString(arg, "data", ob) < 0) {
-		goto exit;
-	}
-	data = ob;
-	ob = PyLong_FromLong(rtnl_addr_get_ifindex(addr));
-	if (ob == NULL || PyDict_SetItemString(data, "ifindex", ob) < 0) {
-		goto exit;
-	}
-	Py_DECREF(ob);
-	ob = PyLong_FromLong(rtnl_addr_get_flags(addr));
-	if (ob == NULL || PyDict_SetItemString(data, "flags", ob) < 0) {
-		goto exit;
-	}
-	Py_DECREF(ob);
-	ob = PyLong_FromLong(rtnl_addr_get_family(addr));
-	if (ob == NULL || PyDict_SetItemString(data, "family", ob) < 0) {
-		goto exit;
-	}
-	Py_DECREF(ob);
 	struct nl_addr *local = rtnl_addr_get_local(addr);
 	if (local != NULL) {
 		char buf[100];
-		ob = PyBytes_FromString(nl_addr2str(local, buf, 100));
+		PyObject *ob = PyBytes_FromString(nl_addr2str(local, buf, 100));
 		if (ob == NULL || PyDict_SetItemString(data, "local", ob) < 0) {
+			Py_XDECREF(ob);
 			goto exit;
 		}
 		Py_DECREF(ob);
 	}
-	ob = NULL;
-	PyObject *r = PyObject_CallMethod(listener->observer, "addr_change", "O", arg);
+	PyObject *r = PyObject_CallMethod(listener->observer, "addr_change", "sO", act2str(act), data);
 	Py_XDECREF(r);
 
   exit:
-	Py_XDECREF(ob);
 	Py_XDECREF(data);
-	Py_XDECREF(arg);
 	if (PyErr_Occurred()) {
 		PyErr_Fetch(&listener->exc_typ, &listener->exc_val, &listener->exc_tb);
 	}
