@@ -1,11 +1,14 @@
 import os
 import pprint
 import select
+import logging
 
 import pyudev
 
 import _nl80211
 import _rtnetlink
+
+log = logging.getLogger('subiquitycore.models.network')
 
 # Standard interface flags (net/if.h)
 IFF_UP = 0x1                   # Interface is up.
@@ -101,7 +104,7 @@ class NetworkInfo:
         self.netlink_data = netlink_data
         self.udev_data = udev_data
 
-        self.name = self.netlink_data.get('name')
+        self.name = self.netlink_data.get('name').decode('utf-8', 'replace')
         self.flags = self.netlink_data['flags']
         self.hwaddr = self.udev_data['attrs']['address']
 
@@ -127,7 +130,7 @@ class NetworkInfo:
     def _get_hwvalues(self, keys, missing='Unknown value'):
         for key in keys:
             try:
-                return self.hwinfo[key]
+                return self.udev_data[key]
             except KeyError:
                 pass
 
@@ -298,15 +301,21 @@ class UdevObserver:
         self.wlan_listener = _nl80211.listener(self)
         self.wlan_listener.start()
 
-        return {
+        self._fdmap =  {
             self.rtlistener.fileno(): self.rtlistener.data_ready,
             self.wlan_listener.fileno(): self.wlan_listener.data_ready,
             }
+        return list(self._fdmap)
+
+    def data_ready(self, fd):
+        self._fdmap[fd]()
 
     def link_change(self, action, data):
+        log.debug('link_change %s %s', action, data)
         ifindex = data['ifindex']
         if action == 'DEL':
             del self.links[data['ifindex']]
+            self.del_link(ifindex)
             return
         if action == 'CHANGE':
             # Not sure what to do here, don't want to override self.links[d['ifindex']] as that
@@ -322,9 +331,12 @@ class UdevObserver:
         udev_device = udev_devices[0]
         udev_data = dict(udev_device)
         udev_data['attrs'] = udev_get_attributes(udev_device)
+        link = NetworkInfo(data, udev_data)
         self.links[data['ifindex']] = NetworkInfo(data, udev_data)
+        self.new_link(ifindex, link)
 
     def addr_change(self, action, data):
+        log.debug('addr_change %s %s', action, data)
         link = self.links.get(data['ifindex'])
         if link is None:
             return
@@ -344,12 +356,11 @@ class UdevObserver:
         link.ip_sources[ip] = source
 
     def wlan_event(self, arg):
+        log.debug('wlan_event %s', arg)
         ifindex = arg['ifindex']
         if ifindex < 0 or ifindex not in self.links:
-            print("wlan_event for unknown ifindex", ifindex)
             return
         link = self.links[ifindex]
-        print(arg)
         if arg['cmd'] == 'TRIGGER_SCAN':
             link.scan_state = 'scanning'
         if arg['cmd'] == 'NEW_SCAN_RESULTS' and 'ssids' in arg:
@@ -357,9 +368,7 @@ class UdevObserver:
             for (ssid, status) in arg['ssids']:
                 ssids.add(ssid)
                 if status != "no status":
-                    print("setting ssid")
                     link.ssid = ssid
-            print(ssids, link)
             link.ssids = sorted(ssids)
             link.scan_state = None
         if arg['cmd'] == 'NEW_INTERFACE' or arg['cmd'] == 'ASSOCIATE':
@@ -373,18 +382,24 @@ class UdevObserver:
         if arg['cmd'] == 'DISCONNECT':
             link.ssid = None
 
+    def new_link(self, ifindex, link):
+        pass
+
+    def del_link(self, ifindex):
+        pass
+
 
 if __name__ == '__main__':
     c = UdevObserver()
-    fdmap = c.start()
+    fds = c.start()
 
     pprint.pprint(c.links)
 
     poll_ob = select.epoll()
-    for fd in fdmap:
+    for fd in fds:
         poll_ob.register(fd, select.EPOLLIN)
     while True:
         events = poll_ob.poll()
         for (fd, e) in events:
-            fdmap[fd]()
+            c.data_ready(fd)
         pprint.pprint(c.links)
