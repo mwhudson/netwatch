@@ -332,7 +332,7 @@ class UdevObserver:
         udev_data = dict(udev_device)
         udev_data['attrs'] = udev_get_attributes(udev_device)
         link = NetworkInfo(data, udev_data)
-        self.links[data['ifindex']] = NetworkInfo(data, udev_data)
+        self.links[data['ifindex']] = link
         self.new_link(ifindex, link)
 
     def addr_change(self, action, data):
